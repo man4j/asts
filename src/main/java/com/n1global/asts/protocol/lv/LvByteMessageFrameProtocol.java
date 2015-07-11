@@ -8,42 +8,39 @@ import com.n1global.asts.protocol.AbstractFrameProtocol;
 import com.n1global.asts.util.BufUtils;
 
 public class LvByteMessageFrameProtocol<T extends ByteMessage> extends AbstractFrameProtocol<T> {
-    private ByteBuffer currentIncomingBuf;
-
-    private ByteBuffer lengthBuf = ByteBuffer.allocate(Character.SIZE >> 3);
-
+    private static final int CHAR_SIZE = (Character.SIZE >> 3);
+    
     @Override
-    public ByteBuffer msgToBuf(T frame) {
-        return ByteBuffer.allocate(frame.getValue().length + (Character.SIZE >> 3))
-            .putChar((char) frame.getValue().length).put(frame.getValue());
+    public void msgToBuf(ByteBuffer buf, T frame) {
+        buf.putChar((char) frame.getValue().length).put(frame.getValue()).limit(CHAR_SIZE + frame.getValue().length);
     }
-
+    
     @Override
     public T bufToMsg(ByteBuffer buf) {
-        if (lengthBuf.hasRemaining()) {
-            BufUtils.copy(buf, lengthBuf);
-
-            if (!lengthBuf.hasRemaining()) { //if we have length
-                lengthBuf.clear();
-
-                int length = lengthBuf.getChar();
-
-                currentIncomingBuf = ByteBuffer.allocate(length);
+        if (getIncomingBuf().position() < CHAR_SIZE) {
+            getIncomingBuf().limit(CHAR_SIZE);
+            
+            BufUtils.copy(buf, getIncomingBuf());
+            
+            if (getIncomingBuf().position() == CHAR_SIZE) {
+                int length = ((ByteBuffer) getIncomingBuf().position(0)).getChar();
+                
+                getIncomingBuf().limit(length + CHAR_SIZE);
             } else {
                 return null;
             }
         }
+        
+        BufUtils.copy(buf, getIncomingBuf());
+        
+        if (!getIncomingBuf().hasRemaining()) {
+            byte[] msg = new byte[getIncomingBuf().limit() - CHAR_SIZE];
+            
+            ((ByteBuffer)getIncomingBuf().position(CHAR_SIZE)).get(msg);
+            
+            T frame = createMessage(msg);
 
-        BufUtils.copy(buf, currentIncomingBuf);
-
-        if (!currentIncomingBuf.hasRemaining()) {
-            T frame = createMessage();
-
-            frame.setValue(currentIncomingBuf.array());
-
-            currentIncomingBuf = null;
-
-            lengthBuf.clear();
+            getIncomingBuf().clear();
 
             return frame;
         }
@@ -53,6 +50,6 @@ public class LvByteMessageFrameProtocol<T extends ByteMessage> extends AbstractF
 
     @Override
     public RecvState getState() {
-        return currentIncomingBuf == null && lengthBuf.position() == 0 ? RecvState.IDLE : RecvState.READ;
+        return getIncomingBuf().position() == 0 ? RecvState.IDLE : RecvState.READ;
     }
 }

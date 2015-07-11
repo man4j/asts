@@ -5,56 +5,73 @@ import java.nio.ByteBuffer;
 import com.fasterxml.classmate.ResolvedType;
 import com.fasterxml.classmate.TypeResolver;
 import com.n1global.asts.RecvState;
-import com.n1global.asts.message.Message;
+import com.n1global.asts.message.ByteMessage;
+import com.n1global.asts.util.BufUtils;
 
 /**
  * The main target of FrameProtocol is convert messages to frames.
  */
-abstract public class AbstractFrameProtocol<T extends Message> {
+abstract public class AbstractFrameProtocol<T extends ByteMessage> {
+    private static TypeResolver typeResolver = new TypeResolver();
+    
+    private Class<T> msgType;
+    
     private T currentMessage;
 
-    private TypeResolver typeResolver = new TypeResolver();
-
-    private ByteBuffer currentOutgoingBuf;
+    private ByteBuffer outgoingBuf;
     
-    abstract public ByteBuffer msgToBuf(T msg);
+    private ByteBuffer incomingBuf;
+    
+    abstract public void msgToBuf(ByteBuffer buf, T msg);
 
     abstract public T bufToMsg(ByteBuffer buf);
     
     abstract public RecvState getState();
+    
+    @SuppressWarnings("unchecked")
+    public AbstractFrameProtocol() {
+        ResolvedType rt = typeResolver.resolve(getClass()).typeParametersFor(AbstractFrameProtocol.class).get(0);
 
+        msgType = (Class<T>) rt.getErasedType();
+    }
+    
+    public void initBuffers(int capacity) {
+        outgoingBuf = ByteBuffer.allocateDirect(capacity);   
+        incomingBuf = ByteBuffer.allocateDirect(capacity);
+    }
+    
+    public void destroyBuffers() {
+        BufUtils.destroyDirect(outgoingBuf);
+        BufUtils.destroyDirect(incomingBuf);
+    }
+    
     public ByteBuffer getBuffer(T msg) {
-        if (msg == currentMessage) return currentOutgoingBuf;
+        if (msg == currentMessage) return outgoingBuf;
+        
+        outgoingBuf.clear();
 
-        currentOutgoingBuf = (ByteBuffer) msgToBuf(msg).clear();
-
+        msgToBuf(outgoingBuf, msg);
+        
+        outgoingBuf.position(0);
+        
         currentMessage = msg;
 
-        return currentOutgoingBuf;
+        return outgoingBuf;
     }
-
-    public void tryShrinkBuffer() {
-        int half = currentOutgoingBuf.capacity() / 2;
-
-        if (currentOutgoingBuf.position() >= half) {
-            ByteBuffer shrinkedBuf = ByteBuffer.allocate(currentOutgoingBuf.remaining());
-
-            shrinkedBuf.put(currentOutgoingBuf);
-
-            shrinkedBuf.clear();
-
-            currentOutgoingBuf = shrinkedBuf;
-        }
-    }
-
-    @SuppressWarnings("unchecked")
-    public T createMessage() {
+    
+    public T createMessage(byte[] value) {
         try {
-            ResolvedType rt = typeResolver.resolve(getClass()).typeParametersFor(AbstractFrameProtocol.class).get(0);
-
-            return (T) rt.getErasedType().newInstance();
+            T msg = msgType.newInstance();
+            
+            msg.setValue(value);
+            
+            return msg;
         } catch(Exception e) {
             throw new RuntimeException(e);
         }
+    }
+    
+    public ByteBuffer getIncomingBuf() {
+        return incomingBuf;
     }
 }

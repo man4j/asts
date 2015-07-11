@@ -1,5 +1,7 @@
 package com.n1global.asts;
 
+import gnu.trove.list.linked.TLinkedList;
+
 import java.io.EOFException;
 import java.io.IOException;
 import java.net.InetSocketAddress;
@@ -18,8 +20,9 @@ import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import com.n1global.asts.message.Message;
-import com.n1global.asts.util.CustomLinkedList;
+import com.n1global.asts.message.ByteMessage;
+import com.n1global.asts.protocol.AbstractFrameProtocol;
+import com.n1global.asts.util.EndpointContextContainer;
 
 public class MainLoop {
     private Logger logger = LoggerFactory.getLogger(this.getClass());
@@ -31,12 +34,9 @@ public class MainLoop {
     private MainLoopConfig config;
 
     private long lastTimeoutsCheck = System.currentTimeMillis();
-
-    private CustomLinkedList<EndpointContext<Message>> idleEndpoints = new CustomLinkedList<>();
-
-    private CustomLinkedList<EndpointContext<Message>> readEndpoints = new CustomLinkedList<>();
-
-    private CustomLinkedList<EndpointContext<Message>> writeEndpoints = new CustomLinkedList<>();
+    
+    private TLinkedList<EndpointContextContainer<ByteMessage>> idleEndpoints  = new TLinkedList<>();
+    private TLinkedList<EndpointContextContainer<ByteMessage>> readEndpoints  = new TLinkedList<>();
 
     public MainLoop(MainLoopConfig config) {
         try {
@@ -54,7 +54,7 @@ public class MainLoop {
         this(new MainLoopConfig.Builder().build());
     }
 
-    public <T extends Message> void addServer(EndpointConfig<T> config) {
+    public <T extends ByteMessage> void addServer(EndpointConfig<T> config) {
         try {
             ServerSocketChannel serverSocketChannel = (ServerSocketChannel) ServerSocketChannel.open()
                                                                                                .bind(new InetSocketAddress(config.getLocalAddr(), config.getLocalPort()), 50)
@@ -68,7 +68,7 @@ public class MainLoop {
         }
     }
 
-    public <T extends Message> void addClient(EndpointConfig<T> config, SocketAddress remote) {
+    public <T extends ByteMessage> void addClient(EndpointConfig<T> config, SocketAddress remote) {
         try {
             SocketChannel socketChannel = (SocketChannel) SocketChannel.open().configureBlocking(false);
 
@@ -87,19 +87,27 @@ public class MainLoop {
     }
 
     @SuppressWarnings("unchecked")
-    private <T extends Message> void register(SelectableChannel channel, EndpointConfig<T> config) throws InstantiationException, IllegalAccessException {
+    private <T extends ByteMessage> void register(SelectableChannel channel, EndpointConfig<T> config) throws InstantiationException, IllegalAccessException {
         EndpointContext<T> ctx = new EndpointContext<>();
 
         ctx.setEventHandler(config.getHandlerClass().newInstance());
-        ctx.setProtocol(config.getProtocolClass().newInstance());
+        
+        AbstractFrameProtocol<T> prot = config.getProtocolClass().newInstance();
+        
+        prot.initBuffers(config.getMaxMsgSize());
+        
+        ctx.setProtocol(prot);
         ctx.setSelectionKey(channel.keyFor(selector));
-        ctx.setSender((MessageSender<T>) new MessageSender<>(writeEndpoints, (EndpointContext<Message>) ctx));
+        ctx.setSender((MessageSender<T>) new MessageSender<>((EndpointContext<ByteMessage>) ctx));
 
         channel.keyFor(selector).attach(ctx);
 
         ctx.getEventHandler().onConnect();
 
-        ctx.setIdleNode(idleEndpoints.addX((EndpointContext<Message>) ctx)); //if everything is ok
+        ctx.setIdleNode(new EndpointContextContainer<T>(ctx));
+        ctx.setReadNode(new EndpointContextContainer<T>(ctx));
+        
+        idleEndpoints.add((EndpointContextContainer<ByteMessage>) ctx.getIdleNode());
     }
 
     public void loop() {
@@ -116,12 +124,9 @@ public class MainLoop {
                 SelectionKey key = iter.next();
 
                 if (key.isAcceptable()) processAccept(key);
-
+                if (key.isConnectable()) processConnect(key);
                 if (key.isReadable()) processRead(key);
-
                 if (key.isValid() && key.isWritable()) processWrite(key);
-
-                if (key.isValid() && key.isConnectable()) processConnect(key);
 
                 iter.remove();
             }
@@ -135,7 +140,8 @@ public class MainLoop {
             }
 
             if (System.currentTimeMillis() - lastTimeoutsCheck > 1000) {
-                processTimeouts();
+                checkRead();
+                checkIdle();
 
                 lastTimeoutsCheck = System.currentTimeMillis();
             }
@@ -154,7 +160,7 @@ public class MainLoop {
             if (((SocketChannel) key.channel()).finishConnect()) {
                 key.interestOps(SelectionKey.OP_READ);
 
-                register(key.channel(), (EndpointConfig<Message>) key.attachment());
+                register(key.channel(), (EndpointConfig<ByteMessage>) key.attachment());
             }
         } catch (Exception e) {//if connection unsuccessfully key.cancel() invoked automatically
             logger.error("", e);
@@ -166,7 +172,7 @@ public class MainLoop {
         try {
             SocketChannel ch = ((ServerSocketChannel) key.channel()).accept();
 
-            EndpointConfig<Message> endpointConfig = (EndpointConfig<Message>) key.attachment();
+            EndpointConfig<ByteMessage> endpointConfig = (EndpointConfig<ByteMessage>) key.attachment();
 
             ch.setOption(StandardSocketOptions.SO_KEEPALIVE, true)
               .setOption(StandardSocketOptions.TCP_NODELAY, true)
@@ -190,9 +196,9 @@ public class MainLoop {
     private void bytes2Messages(SelectionKey key) {
         SocketChannel ch = (SocketChannel) key.channel();
 
-        EndpointContext<Message> ctx = (EndpointContext<Message>) key.attachment();
+        EndpointContext<ByteMessage> ctx = (EndpointContext<ByteMessage>) key.attachment();
 
-        List<Message> messages = new ArrayList<>();
+        List<ByteMessage> messages = new ArrayList<>();
 
         try {
             int count;
@@ -202,7 +208,7 @@ public class MainLoop {
 
                 try {
                     while (recvBuf.hasRemaining()) {
-                        Message msg = ctx.getProtocol().bufToMsg(recvBuf);
+                        ByteMessage msg = ctx.getProtocol().bufToMsg(recvBuf);
 
                         if (msg != null) {
                             messages.add(msg);
@@ -231,7 +237,7 @@ public class MainLoop {
         }
     }
 
-    private void onReceive(List<Message> messages, EndpointContext<Message> ctx) {
+    private void onReceive(List<ByteMessage> messages, EndpointContext<ByteMessage> ctx) {
         if (!messages.isEmpty()) {
             try {
                 ctx.getEventHandler().onReceive(messages);
@@ -243,37 +249,27 @@ public class MainLoop {
 
     @SuppressWarnings("unchecked")
     private void updateTimeouts(SelectionKey key) {
-        EndpointContext<Message> ctx = (EndpointContext<Message>) key.attachment();
+        EndpointContext<ByteMessage> ctx = (EndpointContext<ByteMessage>) key.attachment();
 
-        idleEndpoints.remove(ctx.getIdleNode());
         readEndpoints.remove(ctx.getReadNode());
+        idleEndpoints.remove(ctx.getIdleNode());
 
-        ctx.setIdleNode(null);
-        ctx.setReadNode(null);
-
+        if (ctx.getProtocol().getState() == RecvState.IDLE) idleEndpoints.add(ctx.getIdleNode());
+        if (ctx.getProtocol().getState() == RecvState.READ) readEndpoints.add(ctx.getReadNode());
+        
         ctx.setLastRecv(System.currentTimeMillis());
-
-        if (ctx.getProtocol().getState() == RecvState.IDLE) ctx.setIdleNode(idleEndpoints.addX(ctx));
-        if (ctx.getProtocol().getState() == RecvState.READ) ctx.setReadNode(readEndpoints.addX(ctx));
     }
 
     @SuppressWarnings("unchecked")
     private void processWrite(SelectionKey key) {
-        EndpointContext<Message> ctx = (EndpointContext<Message>) key.attachment();
+        EndpointContext<ByteMessage> ctx = (EndpointContext<ByteMessage>) key.attachment();
 
         ctx.getSender().sendMessages();
     }
 
-    private void processTimeouts() {
-        processQueue(readEndpoints, true);
-        processQueue(writeEndpoints, false);
-
-        checkIdle();
-    }
-
     private void checkIdle() {
         while (!idleEndpoints.isEmpty()) {
-            EndpointContext<Message> ctx = idleEndpoints.peek();
+            EndpointContext<ByteMessage> ctx = idleEndpoints.getFirst().getValue();
 
             if (System.currentTimeMillis() - ctx.getLastRecv() > config.getIdleTimeout()) {
                 if (ctx.getSelectionKey().isValid()) {
@@ -284,24 +280,18 @@ public class MainLoop {
                     }
                 }
 
-                idleEndpoints.remove();
-
-                ctx.setIdleNode(null);
+                idleEndpoints.removeFirst();
             } else {
                 break;
             }
         }
     }
 
-    private void processQueue(CustomLinkedList<EndpointContext<Message>> queue, boolean recv) {
-        while (!queue.isEmpty()) {
-            EndpointContext<Message> ctx = queue.peek();
+    private void checkRead() {
+        while (!readEndpoints.isEmpty()) {
+            EndpointContext<ByteMessage> ctx = readEndpoints.getFirst().getValue();
 
-            long timeout = recv ? ctx.getLastRecv() : ctx.getLastSend();
-
-            long delay = System.currentTimeMillis() - timeout;
-
-            if (delay > config.getSoTimeout()) {
+            if (System.currentTimeMillis() - ctx.getLastRecv() > config.getSoTimeout()) {
                 if (ctx.getSelectionKey().isValid()) {
                     try {
                         ctx.getEventHandler().onTimeout();
@@ -312,7 +302,7 @@ public class MainLoop {
                     ctx.getEventHandler().closeConnection(null);
                 }
 
-                queue.remove();
+                readEndpoints.removeFirst();
             } else {
                 break;
             }

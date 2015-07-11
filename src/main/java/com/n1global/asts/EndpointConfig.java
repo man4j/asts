@@ -3,10 +3,10 @@ package com.n1global.asts;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
 
-import com.n1global.asts.message.Message;
+import com.n1global.asts.message.ByteMessage;
 import com.n1global.asts.protocol.AbstractFrameProtocol;
 
-public class EndpointConfig<T extends Message> {
+public class EndpointConfig<T extends ByteMessage> {
     private Class<? extends AbstractEventHandler<T>> handlerClass;
 
     private Class<? extends AbstractFrameProtocol<T>> protocolClass;
@@ -14,16 +14,19 @@ public class EndpointConfig<T extends Message> {
     private int socketSendBufSize;
 
     private int socketRecvBufSize;
+    
+    private int maxMsgSize;
 
     private int localPort;
 
     private InetAddress localAddr;
 
-    private EndpointConfig(Class<? extends AbstractEventHandler<T>> handlerClass, Class<? extends AbstractFrameProtocol<T>> protocolClass, int socketSendBufSize, int socketRecvBufSize, int localPort, InetAddress localAddr) {
+    private EndpointConfig(Class<? extends AbstractEventHandler<T>> handlerClass, Class<? extends AbstractFrameProtocol<T>> protocolClass, int socketSendBufSize, int socketRecvBufSize, int maxMsgSize, int localPort, InetAddress localAddr) {
         this.handlerClass = handlerClass;
         this.protocolClass = protocolClass;
         this.socketSendBufSize = socketSendBufSize;
         this.socketRecvBufSize = socketRecvBufSize;
+        this.maxMsgSize = maxMsgSize;
         this.localPort = localPort;
         this.localAddr = localAddr;
     }
@@ -43,6 +46,10 @@ public class EndpointConfig<T extends Message> {
     public int getSocketRecvBufSize() {
         return socketRecvBufSize;
     }
+    
+    public int getMaxMsgSize() {
+        return maxMsgSize;
+    }
 
     public int getLocalPort() {
         return localPort;
@@ -52,7 +59,7 @@ public class EndpointConfig<T extends Message> {
         return localAddr;
     }
 
-    public static class Builder<T extends Message> {
+    public static class Builder<T extends ByteMessage> {
         private Class<? extends AbstractEventHandler<T>> handlerClass;
 
         private Class<? extends AbstractFrameProtocol<T>> protocolClass;
@@ -60,6 +67,8 @@ public class EndpointConfig<T extends Message> {
         private int socketSendBufSize = 8192;
 
         private int socketRecvBufSize = 8192;
+        
+        private int maxMsgSize = 4096;
 
         private int localPort;
 
@@ -96,6 +105,12 @@ public class EndpointConfig<T extends Message> {
 
             return this;
         }
+        
+        public Builder<T> setMaxMsgSize(int maxMsgSize) {
+            this.maxMsgSize = maxMsgSize;
+
+            return this;
+        }
 
         public Builder<T> setLocalPort(int localPort) {
             this.localPort = localPort;
@@ -110,7 +125,7 @@ public class EndpointConfig<T extends Message> {
         }
 
         public EndpointConfig<T> build() {
-            return new EndpointConfig<>(handlerClass, protocolClass, socketSendBufSize, socketRecvBufSize, localPort, localAddr);
+            return new EndpointConfig<>(handlerClass, protocolClass, socketSendBufSize, socketRecvBufSize, maxMsgSize, localPort, localAddr);
         }
     }
 }

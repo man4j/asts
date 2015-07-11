@@ -2,11 +2,11 @@ package com.n1global.asts;
 
 import java.nio.channels.SelectionKey;
 
-import com.n1global.asts.message.Message;
+import com.n1global.asts.message.ByteMessage;
 import com.n1global.asts.protocol.AbstractFrameProtocol;
-import com.n1global.asts.util.CustomLinkedList.Node;
+import com.n1global.asts.util.EndpointContextContainer;
 
-public class EndpointContext<T extends Message> {
+public class EndpointContext<T extends ByteMessage> {
     private AbstractEventHandler<T> eventHandler;
 
     private AbstractFrameProtocol<T> protocol;
@@ -15,15 +15,11 @@ public class EndpointContext<T extends Message> {
 
     private MessageSender<T> sender;
 
-    private long lastRecv;
+    private long lastRecv = System.currentTimeMillis();
 
-    private long lastSend;
+    private EndpointContextContainer<T> readNode;
 
-    private Node<EndpointContext<Message>> readNode;
-
-    private Node<EndpointContext<Message>> idleNode;
-
-    private Node<EndpointContext<Message>> writeNode;
+    private EndpointContextContainer<T> idleNode;
 
     private Object payload;
 
@@ -69,36 +65,20 @@ public class EndpointContext<T extends Message> {
         this.lastRecv = lastRecv;
     }
 
-    long getLastSend() {
-        return lastSend;
-    }
-
-    void setLastSend(long lastSend) {
-        this.lastSend = lastSend;
-    }
-
-    Node<EndpointContext<Message>> getReadNode() {
+    public EndpointContextContainer<T> getReadNode() {
         return readNode;
     }
 
-    void setReadNode(Node<EndpointContext<Message>> readNode) {
+    public void setReadNode(EndpointContextContainer<T> readNode) {
         this.readNode = readNode;
     }
 
-    Node<EndpointContext<Message>> getIdleNode() {
+    public EndpointContextContainer<T> getIdleNode() {
         return idleNode;
     }
 
-    void setIdleNode(Node<EndpointContext<Message>> idleNode) {
+    public void setIdleNode(EndpointContextContainer<T> idleNode) {
         this.idleNode = idleNode;
-    }
-
-    Node<EndpointContext<Message>> getWriteNode() {
-        return writeNode;
-    }
-
-    void setWriteNode(Node<EndpointContext<Message>> writeNode) {
-        this.writeNode = writeNode;
     }
 
     public Object getPayload() {

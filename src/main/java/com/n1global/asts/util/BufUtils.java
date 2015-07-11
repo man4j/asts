@@ -1,5 +1,6 @@
 package com.n1global.asts.util;
 
+import java.lang.reflect.Method;
 import java.nio.ByteBuffer;
 
 public class BufUtils {
@@ -12,10 +13,35 @@ public class BufUtils {
             source.position(source.position() + l);
         }
     }
-
+    
     public static ByteBuffer concat(ByteBuffer buf1, ByteBuffer buf2) {
         ByteBuffer newBuf = ByteBuffer.allocate(buf1.limit() + buf2.limit());
 
         return newBuf.put(buf1).put(buf2);
+    }
+    
+    public static void destroyDirect(ByteBuffer buf) {
+        try {
+            Method cleanerMethod = buf.getClass().getMethod("cleaner");
+            
+            cleanerMethod.setAccessible(true);
+            
+            Object cleaner = cleanerMethod.invoke(buf);
+            
+            Method cleanMethod = cleaner.getClass().getMethod("clean");
+        
+            cleanMethod.setAccessible(true);
+            
+            cleanMethod.invoke(cleaner);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+    
+    public static void main(String[] args) {
+        ByteBuffer source = ByteBuffer.allocate(100);
+        ByteBuffer target = ByteBuffer.allocate(50);
+        
+        BufUtils.copy(source, target);
     }
 }

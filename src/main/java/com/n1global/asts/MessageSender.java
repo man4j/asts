@@ -4,27 +4,24 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.SelectionKey;
 import java.nio.channels.SocketChannel;
+import java.util.Queue;
 import java.util.concurrent.LinkedBlockingQueue;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import com.n1global.asts.message.Message;
-import com.n1global.asts.util.CustomLinkedList;
+import com.n1global.asts.message.ByteMessage;
 
-public class MessageSender<T extends Message> {
+public class MessageSender<T extends ByteMessage> {
     private Logger logger = LoggerFactory.getLogger(this.getClass());
 
-    private CustomLinkedList<EndpointContext<Message>> writeClients;
-
-    private LinkedBlockingQueue<T> sendQueue = new LinkedBlockingQueue<>();
+    private Queue<T> sendQueue = new LinkedBlockingQueue<>();
 
     private EndpointContext<T> ctx;
 
     private boolean canWriteNow = true;
 
-    MessageSender(CustomLinkedList<EndpointContext<Message>> writeClients, EndpointContext<T> ctx) {
-        this.writeClients = writeClients;
+    MessageSender(EndpointContext<T> ctx) {
         this.ctx = ctx;
     }
 
@@ -48,48 +45,30 @@ public class MessageSender<T extends Message> {
         }
     }
 
-    @SuppressWarnings("unchecked")
     private void _sendMessages() {
-        if (ctx.getWriteNode() == null) {
-            ctx.setWriteNode(writeClients.addX((EndpointContext<Message>) ctx));
-        }
-
         T msg;
 
         while ((msg = sendQueue.peek()) != null) {
             ByteBuffer buf = ctx.getProtocol().getBuffer(msg);
 
             try {
-                if (((SocketChannel) ctx.getSelectionKey().channel()).write(buf) > 0) updateTimeout(ctx);
+                ((SocketChannel) ctx.getSelectionKey().channel()).write(buf);
             } catch (IOException e) {
                 logger.error("", e);
 
                 ctx.getEventHandler().closeConnection(e);
             }
 
-            if (buf.hasRemaining()) {
-                ctx.getProtocol().tryShrinkBuffer();
+            if (!buf.hasRemaining()) {
+                sendQueue.remove();
 
-                return;
-            }
-
-            sendQueue.remove();
-
-            try {
-                ctx.getEventHandler().onSend(msg);
-            } catch (Exception e) {
-                logger.error("", e);
+                try {
+                    ctx.getEventHandler().onSend(msg);
+                } catch (Exception e) {
+                    logger.error("", e);
+                }
             }
         }
-    }
-
-    @SuppressWarnings("unchecked")
-    private void updateTimeout(EndpointContext<T> ctx) {
-        ctx.setLastSend(System.currentTimeMillis());
-
-        writeClients.remove(ctx.getWriteNode());
-
-        ctx.setWriteNode(writeClients.addX((EndpointContext<Message>) ctx));
     }
 
     private void checkQueueState() {
@@ -97,18 +76,10 @@ public class MessageSender<T extends Message> {
             ctx.getSelectionKey().interestOps(SelectionKey.OP_READ);
 
             canWriteNow = true;
-
-            removeFromQueue(ctx);
         } else {
             ctx.getSelectionKey().interestOps(SelectionKey.OP_READ | SelectionKey.OP_WRITE);
 
             canWriteNow = false;
         }
-    }
-
-    private void removeFromQueue(EndpointContext<T> ctx) {
-        writeClients.remove(ctx.getWriteNode());
-
-        ctx.setWriteNode(null);
     }
 }

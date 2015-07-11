@@ -1,6 +1,6 @@
 package com.n1global.asts.message;
 
-public class ByteMessage implements Message {
+public class ByteMessage {
     private byte[] value = new byte[0];
 
     public ByteMessage(byte[] value) {

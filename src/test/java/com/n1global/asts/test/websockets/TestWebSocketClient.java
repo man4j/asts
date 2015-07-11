@@ -1,15 +1,14 @@
 package com.n1global.asts.test.websockets;
 
-import java.io.IOException;
 import java.util.concurrent.ExecutionException;
 
 import com.ning.http.client.AsyncHttpClient;
-import com.ning.http.client.websocket.DefaultWebSocketListener;
-import com.ning.http.client.websocket.WebSocket;
-import com.ning.http.client.websocket.WebSocketUpgradeHandler;
+import com.ning.http.client.ws.DefaultWebSocketListener;
+import com.ning.http.client.ws.WebSocket;
+import com.ning.http.client.ws.WebSocketUpgradeHandler;
 
 public class TestWebSocketClient {
-    public static void main(String[] args) throws InterruptedException, ExecutionException, IOException {
+    public static void main(String[] args) throws InterruptedException, ExecutionException {
         AsyncHttpClient c = new AsyncHttpClient();
 
         WebSocket webSocket = c.prepareGet("ws://127.0.0.1:9999").execute(new WebSocketUpgradeHandler.Builder().addWebSocketListener(new DefaultWebSocketListener() {
@@ -19,7 +18,7 @@ public class TestWebSocketClient {
             }
         }).build()).get();
 
-        webSocket.sendTextMessage("Hello!");
+        webSocket.sendMessage("Hello!");
 
         Thread.sleep(1000);
 

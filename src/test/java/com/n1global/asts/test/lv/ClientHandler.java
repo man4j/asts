@@ -8,15 +8,11 @@ import com.n1global.asts.message.StringMessage;
 public class ClientHandler extends AbstractEventHandler<StringMessage> {
     @Override
     public void onConnect() {
-        send(new StringMessage("Hello!"));
+        send(new StringMessage(Message.MESSAGE));
     }
 
     @Override
     public void onReceive(List<StringMessage> messages) {
-        for (StringMessage msg : messages) {
-            System.out.println("Receive: " + msg.getStringValue());
-        }
-
-        closeConnection();
+        send(new StringMessage(Message.MESSAGE));
     }
 }

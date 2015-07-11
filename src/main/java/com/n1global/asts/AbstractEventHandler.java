@@ -4,9 +4,9 @@ import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import com.n1global.asts.message.Message;
+import com.n1global.asts.message.ByteMessage;
 
-public abstract class AbstractEventHandler<T extends Message> {
+public abstract class AbstractEventHandler<T extends ByteMessage> {
     private Logger logger = LoggerFactory.getLogger(this.getClass());
 
     private EndpointContext<T> endpointContext;
@@ -25,7 +25,7 @@ public abstract class AbstractEventHandler<T extends Message> {
 
     public void onReceive(@SuppressWarnings("unused") List<T> messages) {/* empty */}
 
-    public void onSend(@SuppressWarnings("unused") Message msg) {/* empty */}
+    public void onSend(@SuppressWarnings("unused") ByteMessage msg) {/* empty */}
 
     public void onIdle() {/* empty */}
 
@@ -36,6 +36,8 @@ public abstract class AbstractEventHandler<T extends Message> {
     }
 
     public void closeConnection(Exception ex) {
+        getEndpointContext().getProtocol().destroyBuffers();
+        
         if (getEndpointContext().getSelectionKey().isValid()) {
             try {
                 onDisconnect(ex);
