@@ -37,11 +37,4 @@ public class BufUtils {
             throw new RuntimeException(e);
         }
     }
-    
-    public static void main(String[] args) {
-        ByteBuffer source = ByteBuffer.allocate(100);
-        ByteBuffer target = ByteBuffer.allocate(50);
-        
-        BufUtils.copy(source, target);
-    }
 }
