@@ -7,18 +7,21 @@ import com.n1global.asts.AbstractEventHandler;
 import com.n1global.asts.message.StringMessage;
 
 public class ServerHandler extends AbstractEventHandler<StringMessage> {
-    private LongAdder adder = new LongAdder();
+    private static LongAdder messageAdder = new LongAdder();
     
-    public ServerHandler() {
+    private static LongAdder clientAdder = new LongAdder();
+
+    static {
         new Thread() {
             @Override
             public void run() {
                 int prev = 0;
                 while (true) {
                     try {
-                        int current = adder.intValue();
+                        int current = messageAdder.intValue();
                         
-                        System.out.println(current - prev);
+                        System.out.println("Total messages: " + (current - prev) + " per 5 sec");
+                        System.out.println("Connected clients: " + clientAdder.intValue());
                         
                         prev = current;
                         
@@ -32,8 +35,18 @@ public class ServerHandler extends AbstractEventHandler<StringMessage> {
     }
     
     @Override
+    public void onConnect() {
+        clientAdder.increment();
+    }
+    
+    @Override
+    public void onDisconnect(Exception e) {
+        clientAdder.decrement();
+    }
+    
+    @Override
     public void onReceive(List<StringMessage> messages) {
-        adder.increment();
+        messageAdder.increment();
         
         for (StringMessage message : messages) {
             send(new StringMessage(message.getStringValue()));

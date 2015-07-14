@@ -27,14 +27,12 @@ import com.n1global.asts.util.EndpointContextContainer;
 public class MainLoop {
     private Logger logger = LoggerFactory.getLogger(this.getClass());
 
+    private final MainLoopConfig config;
+
     private Selector selector;
 
     private ByteBuffer recvBuf;
 
-    private MainLoopConfig config;
-
-    private long lastTimeoutsCheck = System.currentTimeMillis();
-    
     private TLinkedList<EndpointContextContainer<ByteMessage>> idleEndpoints  = new TLinkedList<>();
     private TLinkedList<EndpointContextContainer<ByteMessage>> readEndpoints  = new TLinkedList<>();
 
@@ -111,6 +109,8 @@ public class MainLoop {
     }
 
     public void loop() {
+        long lastTimeoutsCheck = System.currentTimeMillis();
+        
         while (!Thread.currentThread().isInterrupted()) {
             try {
                 selector.select(1000);

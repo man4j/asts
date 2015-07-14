@@ -20,7 +20,6 @@ public class WebSocketProtocol extends AbstractFrameProtocol<WebSocketMessage> {
 
     private long dataLength;
 
-    @Override
     public ByteBuffer msgToBuf(WebSocketMessage msg) {
         if (msg.getType() == WebSocketMessageType.HANDSHAKE) return ByteBuffer.wrap(msg.getValue());
 
@@ -134,5 +133,11 @@ public class WebSocketProtocol extends AbstractFrameProtocol<WebSocketMessage> {
         for (int i = 0; i < data.length; i++) {
             data[i] = (byte) (data[i] ^ maskingKey[i % 4]);
         }
+    }
+
+    @Override
+    public void msgToBuf(ByteBuffer buf, WebSocketMessage msg) {
+        // TODO Auto-generated method stub
+        
     }
 }
