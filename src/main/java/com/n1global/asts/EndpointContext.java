@@ -2,6 +2,8 @@ package com.n1global.asts;
 
 import java.nio.channels.SelectionKey;
 
+import javax.net.ssl.SSLEngine;
+
 import com.n1global.asts.message.ByteMessage;
 import com.n1global.asts.protocol.AbstractFrameProtocol;
 import com.n1global.asts.util.EndpointContextContainer;
@@ -14,7 +16,9 @@ public class EndpointContext<T extends ByteMessage> {
     private SelectionKey selectionKey;
 
     private MessageSender<T> sender;
-
+    
+    private SSLEngine sslEngine;
+    
     private long lastRecv = System.currentTimeMillis();
 
     private EndpointContextContainer<T> readNode;
@@ -29,6 +33,10 @@ public class EndpointContext<T extends ByteMessage> {
 
     void setSender(MessageSender<T> sender) {
         this.sender = sender;
+    }
+    
+    public SSLEngine getSslEngine() {
+        return sslEngine;
     }
 
     AbstractEventHandler<T> getEventHandler() {

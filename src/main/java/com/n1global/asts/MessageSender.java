@@ -1,11 +1,13 @@
 package com.n1global.asts;
 
-import java.io.IOException;
+import java.io.EOFException;
 import java.nio.ByteBuffer;
 import java.nio.channels.SelectionKey;
 import java.nio.channels.SocketChannel;
 import java.util.Queue;
 import java.util.concurrent.LinkedBlockingQueue;
+
+import javax.net.ssl.SSLEngineResult;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -45,29 +47,68 @@ public class MessageSender<T extends ByteMessage> {
         }
     }
 
+    @SuppressWarnings("incomplete-switch")
     private void _sendMessages() {
         T msg;
-
-        while ((msg = sendQueue.peek()) != null) {
-            ByteBuffer buf = ctx.getProtocol().getBuffer(msg);
-
-            try {
-                ((SocketChannel) ctx.getSelectionKey().channel()).write(buf);
-            } catch (IOException e) {
-                logger.error("", e);
-
-                ctx.getEventHandler().closeConnection(e);
-            }
-
-            if (!buf.hasRemaining()) {
-                sendQueue.remove();
-
-                try {
-                    ctx.getEventHandler().onSend(msg);
-                } catch (Exception e) {
-                    logger.error("", e);
+        
+        boolean complete = false;
+        
+        try {
+            while (!complete) {
+                while ((msg = sendQueue.peek()) != null) {
+                    if (ctx.getProtocol().putNextMsg(msg)) {
+                        sendQueue.remove();    
+                    } else {
+                        break;
+                    }
                 }
+            
+                ByteBuffer appBuf = ctx.getProtocol().getOutgoingBuf();
+                ByteBuffer sndBuf = ctx.getProtocol().getEncryptedOutgoingBuf();
+    
+                appBuf.flip();//теперь читаем
+                
+                boolean wrapSuccess = false;
+                
+                while (!wrapSuccess) {            
+                    SSLEngineResult res = ctx.getSslEngine().wrap(appBuf, sndBuf);
+                
+                    switch (res.getStatus()) {
+                        case OK:
+                            appBuf.compact();//теперь снова готовим к записи
+                            sndBuf.flip();//готовимся читать
+                            
+                            while(sndBuf.hasRemaining()) {
+                                if (((SocketChannel) ctx.getSelectionKey().channel()).write(sndBuf) == 0) {
+                                    complete = true;
+                                    
+                                    break;
+                                }
+                            }
+                            
+                            sndBuf.compact();//снова готовим к записи
+                            wrapSuccess = true;
+                        
+                            break;
+                        case CLOSED: throw new EOFException();
+                        case BUFFER_OVERFLOW:
+                            sndBuf.flip();//т.к. далее планируется только чтение из данного буфера
+                            ByteBuffer b = ByteBuffer.allocate(ctx.getSslEngine().getSession().getPacketBufferSize() + sndBuf.limit()).put(sndBuf);
+                            sndBuf = b;
+                            ctx.getProtocol().setEncryptedOutgoingBuf(sndBuf);
+                            
+                            break;
+                    }
+                }
+            }            
+        } catch (Exception e) {
+            if (e instanceof EOFException) {
+                e = null; //normally disconnect
+            } else {
+                logger.error("", e);
             }
+            
+            ctx.getEventHandler().closeConnection(e);
         }
     }
 

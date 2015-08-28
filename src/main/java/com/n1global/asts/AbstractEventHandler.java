@@ -25,8 +25,6 @@ public abstract class AbstractEventHandler<T extends ByteMessage> {
 
     public void onReceive(@SuppressWarnings("unused") List<T> messages) {/* empty */}
 
-    public void onSend(@SuppressWarnings("unused") ByteMessage msg) {/* empty */}
-
     public void onIdle() {/* empty */}
 
     public void onTimeout() {/* empty */}

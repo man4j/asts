@@ -17,6 +17,9 @@ import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
 
+import javax.net.ssl.SSLEngine;
+import javax.net.ssl.SSLEngineResult;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -30,8 +33,8 @@ public class MainLoop {
     private final MainLoopConfig config;
 
     private Selector selector;
-
-    private ByteBuffer recvBuf;
+    
+    private SSLEngine sslEngine;
 
     private TLinkedList<EndpointContextContainer<ByteMessage>> idleEndpoints  = new TLinkedList<>();
     private TLinkedList<EndpointContextContainer<ByteMessage>> readEndpoints  = new TLinkedList<>();
@@ -39,8 +42,6 @@ public class MainLoop {
     public MainLoop(MainLoopConfig config) {
         try {
             this.config = config;
-
-            recvBuf = ByteBuffer.allocate(config.getAppRecvBufSize());
 
             selector = Selector.open();
         } catch (Exception e) {
@@ -199,23 +200,60 @@ public class MainLoop {
         EndpointContext<ByteMessage> ctx = (EndpointContext<ByteMessage>) key.attachment();
 
         List<ByteMessage> messages = new ArrayList<>();
+        
+        ByteBuffer recvBuf = ctx.getProtocol().getEncryptedIncomingBuf();
+        ByteBuffer appBuf  = ctx.getProtocol().getIncomingBuf();
 
         try {
             int count;
 
             while((count = ch.read(recvBuf)) > 0) {
-                recvBuf.flip();
-
-                try {
-                    while (recvBuf.hasRemaining()) {
-                        ByteMessage msg = ctx.getProtocol().bufToMsg(recvBuf);
-
-                        if (msg != null) {
-                            messages.add(msg);
-                        }
+                recvBuf.flip();//т.к. далее планируется только чтение из данного буфера
+                
+                boolean exit = false;
+                while (!exit) {
+                    SSLEngineResult result = sslEngine.unwrap(recvBuf, appBuf);
+                    
+                    switch(result.getStatus()) {
+                        case OK:
+                            recvBuf.compact();//т.к. далее планируется только запись в этот буфер
+                            appBuf.flip();//т.к. далее планируется только чтение из данного буфера
+                            
+                            ByteMessage msg;
+                            
+                            do {
+                                appBuf.mark();//запоминаем позицию начала сообщения
+                                
+                                if ((msg = ctx.getProtocol().getNextMsg()) != null) {
+                                    messages.add(msg);
+                                    ctx.getProtocol().setState(RecvState.IDLE);
+                                } else {
+                                    appBuf.reset();//если сообщение считано не полностью, возвращаемся к позиции начала сообщения
+                                    ctx.getProtocol().setState(RecvState.READ);
+                                }
+                            } while (msg != null && appBuf.hasRemaining());
+                            
+                            appBuf.compact();//удаляем считанные данные, далее планируется запись
+                            exit = true;
+                            break;
+                        case CLOSED: throw new EOFException();
+                        case BUFFER_OVERFLOW:
+                            appBuf.flip();//т.к. далее планируется только чтение из данного буфера
+                            ByteBuffer b = ByteBuffer.allocate(sslEngine.getSession().getApplicationBufferSize() + appBuf.limit()).put(appBuf);
+                            appBuf = b;//далее планируется только запись в данный буфер
+                            ctx.getProtocol().setIncomingBuf(appBuf);
+                            
+                            break;
+                        case BUFFER_UNDERFLOW:
+                            if (sslEngine.getSession().getPacketBufferSize() > recvBuf.capacity()) {
+                                b = ByteBuffer.allocate(sslEngine.getSession().getPacketBufferSize()).put(recvBuf);
+                                recvBuf = b;//далее планируется только запись в данный буфер
+                                ctx.getProtocol().setEncryptedIncomingBuf(recvBuf);
+                            }
+                            
+                            exit = true;
+                            break;
                     }
-                } finally {
-                    recvBuf.clear();
                 }
             }
 

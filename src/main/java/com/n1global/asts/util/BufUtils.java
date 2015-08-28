@@ -14,6 +14,16 @@ public class BufUtils {
         }
     }
     
+    public static int copy(byte[] source, int offset, ByteBuffer target) {
+        int l = (source.length < target.remaining()) ? source.length : target.remaining();
+
+        if (l > 0) {
+            target.put(source, offset, l);
+        }
+        
+        return l;
+    }
+    
     public static ByteBuffer concat(ByteBuffer buf1, ByteBuffer buf2) {
         ByteBuffer newBuf = ByteBuffer.allocate(buf1.limit() + buf2.limit());
 

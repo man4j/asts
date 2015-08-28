@@ -39,7 +39,7 @@ public class WebSocketProtocol extends AbstractFrameProtocol<WebSocketMessage> {
     }
 
     @Override
-    public WebSocketMessage bufToMsg(ByteBuffer buf) {
+    public WebSocketMessage nextMsg(ByteBuffer buf) {
         if (!handshakeReceived) {
             if (currentIncomingBuf == null) //new frame
                 currentIncomingBuf = ByteBuffer.allocate(buf.limit()).put(buf);

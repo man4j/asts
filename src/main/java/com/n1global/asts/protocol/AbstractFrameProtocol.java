@@ -16,17 +16,21 @@ abstract public class AbstractFrameProtocol<T extends ByteMessage> {
     
     private Class<T> msgType;
     
-    private T currentMessage;
+    private int msgOffset;
 
     private ByteBuffer outgoingBuf;
     
+    private ByteBuffer encryptedOutgoingBuf;
+    
     private ByteBuffer incomingBuf;
     
-    abstract public void msgToBuf(ByteBuffer buf, T msg);
-
-    abstract public T bufToMsg(ByteBuffer buf);
+    private ByteBuffer encryptedIncomingBuf;
     
-    abstract public RecvState getState();
+    private RecvState state = RecvState.IDLE;
+    
+    abstract public boolean putNextMsg(T msg);
+
+    abstract public T getNextMsg();
     
     @SuppressWarnings("unchecked")
     public AbstractFrameProtocol() {
@@ -40,23 +44,16 @@ abstract public class AbstractFrameProtocol<T extends ByteMessage> {
         incomingBuf = ByteBuffer.allocateDirect(capacity);
     }
     
+    public void initEncryptedBuffers(int capacity) {
+        encryptedIncomingBuf = ByteBuffer.allocateDirect(capacity);
+        encryptedOutgoingBuf = ByteBuffer.allocate(capacity);
+    }
+    
     public void destroyBuffers() {
         BufUtils.destroyDirect(outgoingBuf);
         BufUtils.destroyDirect(incomingBuf);
-    }
-    
-    public ByteBuffer getBuffer(T msg) {
-        if (msg == currentMessage) return outgoingBuf;
-        
-        outgoingBuf.clear();
-
-        msgToBuf(outgoingBuf, msg);
-        
-        outgoingBuf.position(0);
-        
-        currentMessage = msg;
-
-        return outgoingBuf;
+        BufUtils.destroyDirect(encryptedIncomingBuf);
+        BufUtils.destroyDirect(encryptedOutgoingBuf);
     }
     
     public T createMessage(byte[] value) {
@@ -71,7 +68,51 @@ abstract public class AbstractFrameProtocol<T extends ByteMessage> {
         }
     }
     
+    public int getMsgOffset() {
+        return msgOffset;
+    }
+
+    public void setMsgOffset(int msgOffset) {
+        this.msgOffset = msgOffset;
+    }
+
+    public ByteBuffer getOutgoingBuf() {
+        return outgoingBuf;
+    }
+
+    public void setOutgoingBuf(ByteBuffer outgoingBuf) {
+        this.outgoingBuf = outgoingBuf;
+    }
+    
+    public ByteBuffer getEncryptedOutgoingBuf() {
+        return encryptedOutgoingBuf;
+    }
+
+    public void setEncryptedOutgoingBuf(ByteBuffer encryptedOutgoingBuf) {
+        this.encryptedOutgoingBuf = encryptedOutgoingBuf;
+    }
+
     public ByteBuffer getIncomingBuf() {
         return incomingBuf;
+    }
+    
+    public void setIncomingBuf(ByteBuffer incomingBuf) {
+        this.incomingBuf = incomingBuf;
+    }
+    
+    public ByteBuffer getEncryptedIncomingBuf() {
+        return encryptedIncomingBuf;
+    }
+    
+    public void setEncryptedIncomingBuf(ByteBuffer encryptedIncomingBuf) {
+        this.encryptedIncomingBuf = encryptedIncomingBuf;
+    }
+
+    public RecvState getState() {
+        return state;
+    }
+
+    public void setState(RecvState state) {
+        this.state = state;
     }
 }

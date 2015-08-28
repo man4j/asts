@@ -1,8 +1,5 @@
 package com.n1global.asts.protocol.lv;
 
-import java.nio.ByteBuffer;
-
-import com.n1global.asts.RecvState;
 import com.n1global.asts.message.ByteMessage;
 import com.n1global.asts.protocol.AbstractFrameProtocol;
 import com.n1global.asts.util.BufUtils;
@@ -11,45 +8,46 @@ public class LvByteMessageFrameProtocol<T extends ByteMessage> extends AbstractF
     private static final int CHAR_SIZE = (Character.SIZE >> 3);
     
     @Override
-    public void msgToBuf(ByteBuffer buf, T frame) {
-        buf.putChar((char) frame.getValue().length).put(frame.getValue()).limit(CHAR_SIZE + frame.getValue().length);
-    }
-    
-    @Override
-    public T bufToMsg(ByteBuffer buf) {
-        if (getIncomingBuf().position() < CHAR_SIZE) {
-            getIncomingBuf().limit(CHAR_SIZE);
-            
-            BufUtils.copy(buf, getIncomingBuf());
-            
-            if (getIncomingBuf().position() == CHAR_SIZE) {
-                int length = ((ByteBuffer) getIncomingBuf().position(0)).getChar();
+    public boolean putNextMsg(T frame) {
+        if (getMsgOffset() == 0) {
+            if (getOutgoingBuf().remaining() >= CHAR_SIZE) {//значит можно записать размер
+                getOutgoingBuf().putChar((char)frame.getValue().length);
                 
-                getIncomingBuf().limit(length + CHAR_SIZE);
+                setMsgOffset(CHAR_SIZE);
             } else {
-                return null;
+                return false;
             }
         }
         
-        BufUtils.copy(buf, getIncomingBuf());
-        
-        if (!getIncomingBuf().hasRemaining()) {
-            byte[] msg = new byte[getIncomingBuf().limit() - CHAR_SIZE];
+        int l = BufUtils.copy(frame.getValue(), getMsgOffset() - CHAR_SIZE, getOutgoingBuf());
             
-            ((ByteBuffer)getIncomingBuf().position(CHAR_SIZE)).get(msg);
+        if (l == frame.getValue().length) {
+            setMsgOffset(0);
+                
+            return true;
+        } else {
+            setMsgOffset(l);
             
-            T frame = createMessage(msg);
-
-            getIncomingBuf().clear();
-
-            return frame;
+            return false;
         }
-
-        return null;
     }
-
+    
     @Override
-    public RecvState getState() {
-        return getIncomingBuf().position() == 0 ? RecvState.IDLE : RecvState.READ;
+    public T getNextMsg() {
+        int availableDataLength = getIncomingBuf().limit() - getIncomingBuf().position();
+        
+        if (availableDataLength >= CHAR_SIZE) {//значит у нас есть размер
+            int length = getIncomingBuf().getChar();
+            
+            if (availableDataLength >= CHAR_SIZE + length) {//значит у нас есть минимум одно сообщение
+                byte[] msg = new byte[length];
+                
+                getIncomingBuf().get(msg);
+                
+                return createMessage(msg);
+            }
+        }
+        
+        return null;
     }
 }

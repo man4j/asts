@@ -10,8 +10,8 @@ import com.n1global.asts.protocol.lv.LvStringMessageFrameProtocol;
 
 public class ClientTest {
     public static void main(String[] args) {
-        String host = args[0]; 
-        int threads = Integer.parseInt(args[1]);
+        String host = args.length > 0 ? args[0] : "localhost"; 
+        int threads = args.length > 1 ? Integer.parseInt(args[1]) : 1;
         
         int procs = Runtime.getRuntime().availableProcessors();
         
