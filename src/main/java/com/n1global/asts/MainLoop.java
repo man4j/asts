@@ -19,12 +19,14 @@ import java.util.List;
 
 import javax.net.ssl.SSLEngine;
 import javax.net.ssl.SSLEngineResult;
+import javax.net.ssl.SSLEngineResult.HandshakeStatus;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.n1global.asts.message.ByteMessage;
 import com.n1global.asts.protocol.AbstractFrameProtocol;
+import com.n1global.asts.util.BufUtils;
 import com.n1global.asts.util.EndpointContextContainer;
 
 public class MainLoop {
@@ -217,36 +219,47 @@ public class MainLoop {
                     switch(result.getStatus()) {
                         case OK:
                             recvBuf.compact();//т.к. далее планируется только запись в этот буфер
-                            appBuf.flip();//т.к. далее планируется только чтение из данного буфера
                             
-                            ByteMessage msg;
-                            
-                            do {
-                                appBuf.mark();//запоминаем позицию начала сообщения
+                            if (result.getHandshakeStatus() == HandshakeStatus.FINISHED) {
+                                appBuf.clear();
+                            } else if (result.getHandshakeStatus() == HandshakeStatus.NEED_WRAP) {
+                                appBuf.clear();
                                 
-                                if ((msg = ctx.getProtocol().getNextMsg()) != null) {
-                                    messages.add(msg);
-                                    ctx.getProtocol().setState(RecvState.IDLE);
-                                } else {
-                                    appBuf.reset();//если сообщение считано не полностью, возвращаемся к позиции начала сообщения
-                                    ctx.getProtocol().setState(RecvState.READ);
-                                }
-                            } while (msg != null && appBuf.hasRemaining());
-                            
-                            appBuf.compact();//удаляем считанные данные, далее планируется запись
+                                ctx.getSender().send(new ByteMessage());
+                            } else if (result.getHandshakeStatus() == HandshakeStatus.NOT_HANDSHAKING) {
+                                appBuf.flip();//т.к. далее планируется только чтение из данного буфера
+                                
+                                ByteMessage msg;
+                                
+                                do {
+                                    appBuf.mark();//запоминаем позицию начала сообщения
+                                    
+                                    if ((msg = ctx.getProtocol().getNextMsg()) != null) {
+                                        messages.add(msg);
+                                        ctx.getProtocol().setState(RecvState.IDLE);
+                                    } else {
+                                        appBuf.reset();//если сообщение считано не полностью, возвращаемся к позиции начала сообщения
+                                        ctx.getProtocol().setState(RecvState.READ);
+                                    }
+                                } while (msg != null && appBuf.hasRemaining());
+                                
+                                appBuf.compact();//удаляем считанные данные, далее планируется запись
+                            }
                             exit = true;
                             break;
                         case CLOSED: throw new EOFException();
                         case BUFFER_OVERFLOW:
                             appBuf.flip();//т.к. далее планируется только чтение из данного буфера
-                            ByteBuffer b = ByteBuffer.allocate(sslEngine.getSession().getApplicationBufferSize() + appBuf.limit()).put(appBuf);
+                            ByteBuffer b = ByteBuffer.allocateDirect(sslEngine.getSession().getApplicationBufferSize() + appBuf.limit()).put(appBuf);
+                            BufUtils.destroyDirect(appBuf);
                             appBuf = b;//далее планируется только запись в данный буфер
                             ctx.getProtocol().setIncomingBuf(appBuf);
                             
                             break;
                         case BUFFER_UNDERFLOW:
                             if (sslEngine.getSession().getPacketBufferSize() > recvBuf.capacity()) {
-                                b = ByteBuffer.allocate(sslEngine.getSession().getPacketBufferSize()).put(recvBuf);
+                                b = ByteBuffer.allocateDirect(sslEngine.getSession().getPacketBufferSize()).put(recvBuf);
+                                BufUtils.destroyDirect(recvBuf);
                                 recvBuf = b;//далее планируется только запись в данный буфер
                                 ctx.getProtocol().setEncryptedIncomingBuf(recvBuf);
                             }

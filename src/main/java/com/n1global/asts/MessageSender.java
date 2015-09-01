@@ -8,11 +8,13 @@ import java.util.Queue;
 import java.util.concurrent.LinkedBlockingQueue;
 
 import javax.net.ssl.SSLEngineResult;
+import javax.net.ssl.SSLEngineResult.HandshakeStatus;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.n1global.asts.message.ByteMessage;
+import com.n1global.asts.util.BufUtils;
 
 public class MessageSender<T extends ByteMessage> {
     private Logger logger = LoggerFactory.getLogger(this.getClass());
@@ -47,19 +49,24 @@ public class MessageSender<T extends ByteMessage> {
         }
     }
 
-    @SuppressWarnings("incomplete-switch")
+    @SuppressWarnings({ "incomplete-switch", "unchecked" })
     private void _sendMessages() {
         T msg;
         
-        boolean complete = false;
+        boolean socketIsFull = false;
+        boolean sndBufEmpty = false;
         
         try {
-            while (!complete) {
+            while (!socketIsFull && (!sndBufEmpty || !sendQueue.isEmpty())) {
                 while ((msg = sendQueue.peek()) != null) {
-                    if (ctx.getProtocol().putNextMsg(msg)) {
-                        sendQueue.remove();    
+                    if (ctx.getSslEngine().getHandshakeStatus() == HandshakeStatus.NOT_HANDSHAKING) {
+                        if (ctx.getProtocol().putNextMsg(msg)) {
+                            sendQueue.remove();
+                        } else {
+                            break;
+                        }
                     } else {
-                        break;
+                        sendQueue.remove();//удаляем маркер-сообщение
                     }
                 }
             
@@ -71,29 +78,40 @@ public class MessageSender<T extends ByteMessage> {
                 boolean wrapSuccess = false;
                 
                 while (!wrapSuccess) {            
-                    SSLEngineResult res = ctx.getSslEngine().wrap(appBuf, sndBuf);
-                
+                    SSLEngineResult res = ctx.getSslEngine().wrap(appBuf, sndBuf);//неприятный момент может быть в том, что нельзя враппить пустой appBuf (в случае с хэндшейком тоже такое может быть)
+                    
+                    if (res.getHandshakeStatus() == HandshakeStatus.NEED_WRAP) {
+                        sendQueue.add((T) new ByteMessage());//страхуемся на случай, если предыдущий wrap записал в sndBuf не всё, что нужно для отправки
+                        //при этом, если это "не всё" уйдет в сокет полностью, то цикл завершится и не будет возможности вызвать wrap еще раз
+                    }
+                    
                     switch (res.getStatus()) {
                         case OK:
                             appBuf.compact();//теперь снова готовим к записи
                             sndBuf.flip();//готовимся читать
                             
-                            while(sndBuf.hasRemaining()) {
+                            while (sndBuf.hasRemaining()) {
                                 if (((SocketChannel) ctx.getSelectionKey().channel()).write(sndBuf) == 0) {
-                                    complete = true;
+                                    socketIsFull = true;
                                     
                                     break;
                                 }
                             }
                             
+                            if (!sndBuf.hasRemaining()) {
+                                sndBufEmpty = true;
+                            }
+                            
                             sndBuf.compact();//снова готовим к записи
+                            
                             wrapSuccess = true;
                         
                             break;
                         case CLOSED: throw new EOFException();
                         case BUFFER_OVERFLOW:
                             sndBuf.flip();//т.к. далее планируется только чтение из данного буфера
-                            ByteBuffer b = ByteBuffer.allocate(ctx.getSslEngine().getSession().getPacketBufferSize() + sndBuf.limit()).put(sndBuf);
+                            ByteBuffer b = ByteBuffer.allocateDirect(ctx.getSslEngine().getSession().getPacketBufferSize() + sndBuf.limit()).put(sndBuf);
+                            BufUtils.destroyDirect(b);
                             sndBuf = b;
                             ctx.getProtocol().setEncryptedOutgoingBuf(sndBuf);
                             
@@ -113,7 +131,7 @@ public class MessageSender<T extends ByteMessage> {
     }
 
     private void checkQueueState() {
-        if (sendQueue.isEmpty()) {
+        if (!ctx.getProtocol().getEncryptedOutgoingBuf().hasRemaining()) {
             ctx.getSelectionKey().interestOps(SelectionKey.OP_READ);
 
             canWriteNow = true;

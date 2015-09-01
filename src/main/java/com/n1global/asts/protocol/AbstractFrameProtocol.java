@@ -17,7 +17,7 @@ abstract public class AbstractFrameProtocol<T extends ByteMessage> {
     private Class<T> msgType;
     
     private int msgOffset;
-
+    
     private ByteBuffer outgoingBuf;
     
     private ByteBuffer encryptedOutgoingBuf;
@@ -40,13 +40,13 @@ abstract public class AbstractFrameProtocol<T extends ByteMessage> {
     }
     
     public void initBuffers(int capacity) {
-        outgoingBuf = ByteBuffer.allocateDirect(capacity);   
+        outgoingBuf = ByteBuffer.allocateDirect(capacity);
         incomingBuf = ByteBuffer.allocateDirect(capacity);
     }
     
     public void initEncryptedBuffers(int capacity) {
         encryptedIncomingBuf = ByteBuffer.allocateDirect(capacity);
-        encryptedOutgoingBuf = ByteBuffer.allocate(capacity);
+        encryptedOutgoingBuf = ByteBuffer.allocateDirect(capacity);
     }
     
     public void destroyBuffers() {
@@ -75,7 +75,7 @@ abstract public class AbstractFrameProtocol<T extends ByteMessage> {
     public void setMsgOffset(int msgOffset) {
         this.msgOffset = msgOffset;
     }
-
+    
     public ByteBuffer getOutgoingBuf() {
         return outgoingBuf;
     }
