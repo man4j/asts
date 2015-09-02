@@ -95,8 +95,7 @@ public class MainLoop {
         
         AbstractFrameProtocol<T> prot = config.getProtocolClass().newInstance();
         
-        prot.initBuffers(config.getMaxMsgSize());
-        
+        ctx.initBuffers(config.getMaxMsgSize());
         ctx.setProtocol(prot);
         ctx.setSelectionKey(channel.keyFor(selector));
         ctx.setSender((MessageSender<T>) new MessageSender<>((EndpointContext<ByteMessage>) ctx));
@@ -203,8 +202,8 @@ public class MainLoop {
 
         List<ByteMessage> messages = new ArrayList<>();
         
-        ByteBuffer recvBuf = ctx.getProtocol().getEncryptedIncomingBuf();
-        ByteBuffer appBuf  = ctx.getProtocol().getIncomingBuf();
+        ByteBuffer recvBuf = ctx.getEncryptedIncomingBuf();
+        ByteBuffer appBuf  = ctx.getIncomingBuf();
 
         try {
             int count;
@@ -234,12 +233,12 @@ public class MainLoop {
                                 do {
                                     appBuf.mark();//запоминаем позицию начала сообщения
                                     
-                                    if ((msg = ctx.getProtocol().getNextMsg()) != null) {
+                                    if ((msg = ctx.getProtocol().getNextMsg(appBuf)) != null) {
                                         messages.add(msg);
-                                        ctx.getProtocol().setState(RecvState.IDLE);
+                                        ctx.setState(RecvState.IDLE);
                                     } else {
                                         appBuf.reset();//если сообщение считано не полностью, возвращаемся к позиции начала сообщения
-                                        ctx.getProtocol().setState(RecvState.READ);
+                                        ctx.setState(RecvState.READ);
                                     }
                                 } while (msg != null && appBuf.hasRemaining());
                                 
@@ -253,7 +252,7 @@ public class MainLoop {
                             ByteBuffer b = ByteBuffer.allocateDirect(sslEngine.getSession().getApplicationBufferSize() + appBuf.limit()).put(appBuf);
                             BufUtils.destroyDirect(appBuf);
                             appBuf = b;//далее планируется только запись в данный буфер
-                            ctx.getProtocol().setIncomingBuf(appBuf);
+                            ctx.setIncomingBuf(appBuf);
                             
                             break;
                         case BUFFER_UNDERFLOW:
@@ -261,7 +260,7 @@ public class MainLoop {
                                 b = ByteBuffer.allocateDirect(sslEngine.getSession().getPacketBufferSize()).put(recvBuf);
                                 BufUtils.destroyDirect(recvBuf);
                                 recvBuf = b;//далее планируется только запись в данный буфер
-                                ctx.getProtocol().setEncryptedIncomingBuf(recvBuf);
+                                ctx.setEncryptedIncomingBuf(recvBuf);
                             }
                             
                             exit = true;
@@ -305,8 +304,8 @@ public class MainLoop {
         readEndpoints.remove(ctx.getReadNode());
         idleEndpoints.remove(ctx.getIdleNode());
 
-        if (ctx.getProtocol().getState() == RecvState.IDLE) idleEndpoints.add(ctx.getIdleNode());
-        if (ctx.getProtocol().getState() == RecvState.READ) readEndpoints.add(ctx.getReadNode());
+        if (ctx.getState() == RecvState.IDLE) idleEndpoints.add(ctx.getIdleNode());
+        if (ctx.getState() == RecvState.READ) readEndpoints.add(ctx.getReadNode());
         
         ctx.setLastRecv(System.currentTimeMillis());
     }

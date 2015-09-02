@@ -1,5 +1,7 @@
 package com.n1global.asts.protocol.lv;
 
+import java.nio.ByteBuffer;
+
 import com.n1global.asts.message.ByteMessage;
 import com.n1global.asts.protocol.AbstractFrameProtocol;
 import com.n1global.asts.util.BufUtils;
@@ -8,10 +10,10 @@ public class LvByteMessageFrameProtocol<T extends ByteMessage> extends AbstractF
     private static final int CHAR_SIZE = (Character.SIZE >> 3);
     
     @Override
-    public boolean putNextMsg(T frame) {
+    public boolean putNextMsg(ByteBuffer buf, T frame) {
         if (getMsgOffset() == 0) {
-            if (getOutgoingBuf().remaining() >= CHAR_SIZE) {//значит можно записать размер
-                getOutgoingBuf().putChar((char)frame.getValue().length);
+            if (buf.remaining() >= CHAR_SIZE) {//значит можно записать размер
+                buf.putChar((char)frame.getValue().length);
                 
                 setMsgOffset(CHAR_SIZE);
             } else {
@@ -19,30 +21,30 @@ public class LvByteMessageFrameProtocol<T extends ByteMessage> extends AbstractF
             }
         }
         
-        int l = BufUtils.copy(frame.getValue(), getMsgOffset() - CHAR_SIZE, getOutgoingBuf());
+        int l = BufUtils.copy(frame.getValue(), getMsgOffset() - CHAR_SIZE, buf);
             
         if (l == frame.getValue().length) {
             setMsgOffset(0);
                 
             return true;
         } else {
-            setMsgOffset(l);
+            setMsgOffset(getMsgOffset() + l);
             
             return false;
         }
     }
     
     @Override
-    public T getNextMsg() {
-        int availableDataLength = getIncomingBuf().limit() - getIncomingBuf().position();
+    public T getNextMsg(ByteBuffer buf) {
+        int availableDataLength = buf.limit() - buf.position();
         
         if (availableDataLength >= CHAR_SIZE) {//значит у нас есть размер
-            int length = getIncomingBuf().getChar();
+            int length = buf.getChar();
             
             if (availableDataLength >= CHAR_SIZE + length) {//значит у нас есть минимум одно сообщение
                 byte[] msg = new byte[length];
                 
-                getIncomingBuf().get(msg);
+                buf.get(msg);
                 
                 return createMessage(msg);
             }

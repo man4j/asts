@@ -1,11 +1,13 @@
 package com.n1global.asts;
 
+import java.nio.ByteBuffer;
 import java.nio.channels.SelectionKey;
 
 import javax.net.ssl.SSLEngine;
 
 import com.n1global.asts.message.ByteMessage;
 import com.n1global.asts.protocol.AbstractFrameProtocol;
+import com.n1global.asts.util.BufUtils;
 import com.n1global.asts.util.EndpointContextContainer;
 
 public class EndpointContext<T extends ByteMessage> {
@@ -26,6 +28,33 @@ public class EndpointContext<T extends ByteMessage> {
     private EndpointContextContainer<T> idleNode;
 
     private Object payload;
+    
+    private ByteBuffer outgoingBuf;
+    
+    private ByteBuffer encryptedOutgoingBuf;
+    
+    private ByteBuffer incomingBuf;
+    
+    private ByteBuffer encryptedIncomingBuf;
+    
+    private RecvState state = RecvState.IDLE;
+    
+    public void initBuffers(int capacity) {
+        outgoingBuf = ByteBuffer.allocateDirect(capacity);
+        incomingBuf = ByteBuffer.allocateDirect(capacity);
+    }
+    
+    public void initEncryptedBuffers(int capacity) {
+        encryptedIncomingBuf = ByteBuffer.allocateDirect(capacity);
+        encryptedOutgoingBuf = ByteBuffer.allocateDirect(capacity);
+    }
+    
+    public void destroyBuffers() {
+        BufUtils.destroyDirect(outgoingBuf);
+        BufUtils.destroyDirect(incomingBuf);
+        BufUtils.destroyDirect(encryptedIncomingBuf);
+        BufUtils.destroyDirect(encryptedOutgoingBuf);
+    }
 
     public MessageSender<T> getSender() {
         return sender;
@@ -95,5 +124,45 @@ public class EndpointContext<T extends ByteMessage> {
 
     public void setPayload(Object payload) {
         this.payload = payload;
+    }
+
+    public ByteBuffer getOutgoingBuf() {
+        return outgoingBuf;
+    }
+
+    public void setOutgoingBuf(ByteBuffer outgoingBuf) {
+        this.outgoingBuf = outgoingBuf;
+    }
+
+    public ByteBuffer getEncryptedOutgoingBuf() {
+        return encryptedOutgoingBuf;
+    }
+
+    public void setEncryptedOutgoingBuf(ByteBuffer encryptedOutgoingBuf) {
+        this.encryptedOutgoingBuf = encryptedOutgoingBuf;
+    }
+
+    public ByteBuffer getIncomingBuf() {
+        return incomingBuf;
+    }
+
+    public void setIncomingBuf(ByteBuffer incomingBuf) {
+        this.incomingBuf = incomingBuf;
+    }
+
+    public ByteBuffer getEncryptedIncomingBuf() {
+        return encryptedIncomingBuf;
+    }
+
+    public void setEncryptedIncomingBuf(ByteBuffer encryptedIncomingBuf) {
+        this.encryptedIncomingBuf = encryptedIncomingBuf;
+    }
+
+    public RecvState getState() {
+        return state;
+    }
+
+    public void setState(RecvState state) {
+        this.state = state;
     }
 }

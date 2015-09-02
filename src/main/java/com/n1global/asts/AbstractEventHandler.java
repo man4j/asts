@@ -34,7 +34,7 @@ public abstract class AbstractEventHandler<T extends ByteMessage> {
     }
 
     public void closeConnection(Exception ex) {
-        getEndpointContext().getProtocol().destroyBuffers();
+        getEndpointContext().destroyBuffers();
         
         if (getEndpointContext().getSelectionKey().isValid()) {
             try {
