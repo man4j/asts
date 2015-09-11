@@ -1,7 +1,5 @@
 package com.n1global.asts;
 
-import gnu.trove.list.linked.TLinkedList;
-
 import java.io.EOFException;
 import java.io.IOException;
 import java.net.InetSocketAddress;
@@ -13,21 +11,32 @@ import java.nio.channels.SelectionKey;
 import java.nio.channels.Selector;
 import java.nio.channels.ServerSocketChannel;
 import java.nio.channels.SocketChannel;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
+import java.util.concurrent.CompletionService;
+import java.util.concurrent.ExecutorCompletionService;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
-import javax.net.ssl.SSLEngine;
+import javax.net.ssl.KeyManagerFactory;
+import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLEngineResult;
 import javax.net.ssl.SSLEngineResult.HandshakeStatus;
+import javax.net.ssl.SSLException;
+import javax.net.ssl.TrustManagerFactory;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.n1global.asts.message.ByteMessage;
-import com.n1global.asts.protocol.AbstractFrameProtocol;
 import com.n1global.asts.util.BufUtils;
 import com.n1global.asts.util.EndpointContextContainer;
+
+import gnu.trove.list.linked.TLinkedList;
 
 public class MainLoop {
     private Logger logger = LoggerFactory.getLogger(this.getClass());
@@ -36,14 +45,28 @@ public class MainLoop {
 
     private Selector selector;
     
-    private SSLEngine sslEngine;
-
+    private SSLContext sslContext;
+    
     private TLinkedList<EndpointContextContainer<ByteMessage>> idleEndpoints  = new TLinkedList<>();
     private TLinkedList<EndpointContextContainer<ByteMessage>> readEndpoints  = new TLinkedList<>();
+    
+    private ExecutorService executorService = Executors.newCachedThreadPool();
+    
+    private CompletionService<EndpointContext<ByteMessage>> completionService = new ExecutorCompletionService<>(executorService);
 
     public MainLoop(MainLoopConfig config) {
         try {
             this.config = config;
+            
+            sslContext = SSLContext.getInstance("TLSv1.2");
+            
+            KeyManagerFactory kmf = KeyManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
+            kmf.init(config.getKeyStore(), config.getKeyStorePassword().toCharArray());
+            
+            TrustManagerFactory tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
+            tmf.init(config.getTrustStore());
+            
+            sslContext.init(kmf.getKeyManagers(), tmf.getTrustManagers(), null);
 
             selector = Selector.open();
         } catch (Exception e) {
@@ -72,7 +95,7 @@ public class MainLoop {
     public <T extends ByteMessage> void addClient(EndpointConfig<T> config, SocketAddress remote) {
         try {
             SocketChannel socketChannel = (SocketChannel) SocketChannel.open().configureBlocking(false);
-
+            
             socketChannel.bind(new InetSocketAddress(config.getLocalAddr(), config.getLocalPort()))
                          .setOption(StandardSocketOptions.SO_REUSEADDR, true)
                          .setOption(StandardSocketOptions.SO_KEEPALIVE, true)
@@ -88,26 +111,21 @@ public class MainLoop {
     }
 
     @SuppressWarnings("unchecked")
-    private <T extends ByteMessage> void register(SelectableChannel channel, EndpointConfig<T> config) throws InstantiationException, IllegalAccessException {
+    private <T extends ByteMessage> EndpointContext<T> attachEndpointContext(SelectableChannel channel, EndpointConfig<T> config, boolean client) throws InstantiationException, IllegalAccessException, SSLException, NoSuchAlgorithmException {
         EndpointContext<T> ctx = new EndpointContext<>();
 
+        ctx.initSSL(sslContext, client);
         ctx.setEventHandler(config.getHandlerClass().newInstance());
-        
-        AbstractFrameProtocol<T> prot = config.getProtocolClass().newInstance();
-        
-        ctx.initBuffers(config.getMaxMsgSize());
-        ctx.setProtocol(prot);
+        ctx.setProtocol(config.getProtocolClass().newInstance());
         ctx.setSelectionKey(channel.keyFor(selector));
-        ctx.setSender((MessageSender<T>) new MessageSender<>((EndpointContext<ByteMessage>) ctx));
 
         channel.keyFor(selector).attach(ctx);
 
-        ctx.getEventHandler().onConnect();
-
-        ctx.setIdleNode(new EndpointContextContainer<T>(ctx));
-        ctx.setReadNode(new EndpointContextContainer<T>(ctx));
-        
         idleEndpoints.add((EndpointContextContainer<ByteMessage>) ctx.getIdleNode());
+        
+        ctx.getEventHandler().onConnect();
+        
+        return ctx;
     }
 
     public void loop() {
@@ -146,12 +164,36 @@ public class MainLoop {
                 checkIdle();
 
                 lastTimeoutsCheck = System.currentTimeMillis();
+            }            
+            
+            Future<EndpointContext<ByteMessage>> f;
+            
+            while ((f = completionService.poll()) != null) {
+                try {
+                    EndpointContext<ByteMessage> ctx = f.get();
+                    
+                    switch (ctx.getSslEngine().getHandshakeStatus()) {
+                        case NEED_TASK:
+                            processTask(ctx);
+                            break;
+                        case NEED_WRAP:
+                            ctx.getSender().send(new ByteMessage());
+                            break;
+                        default:
+                            throw new IllegalStateException("Unexpected handshake status: " + ctx.getSslEngine().getHandshakeStatus());
+                    }
+                } catch (Exception e) {
+                    throw new RuntimeException(e);
+                }
             }
         }
 
         try {
             selector.close();
-        } catch (IOException e) {
+            
+            executorService.shutdownNow();
+            executorService.awaitTermination(1, TimeUnit.DAYS);
+        } catch (Exception e) {
             throw new RuntimeException(e);
         }
     }
@@ -162,7 +204,9 @@ public class MainLoop {
             if (((SocketChannel) key.channel()).finishConnect()) {
                 key.interestOps(SelectionKey.OP_READ);
 
-                register(key.channel(), (EndpointConfig<ByteMessage>) key.attachment());
+                EndpointContext<ByteMessage> ctx = attachEndpointContext(key.channel(), (EndpointConfig<ByteMessage>) key.attachment(), true);
+                
+                ctx.getSender().send(new ByteMessage());//marker message for init handshake
             }
         } catch (Exception e) {//if connection unsuccessfully key.cancel() invoked automatically
             logger.error("", e);
@@ -178,11 +222,11 @@ public class MainLoop {
 
             ch.setOption(StandardSocketOptions.SO_KEEPALIVE, true)
               .setOption(StandardSocketOptions.TCP_NODELAY, true)
-              .setOption(StandardSocketOptions.SO_SNDBUF, endpointConfig.getSocketSendBufSize());
+              .setOption(StandardSocketOptions.SO_SNDBUF, endpointConfig.getSocketSendBufSize())
+              .configureBlocking(false)
+              .register(key.selector(), SelectionKey.OP_READ);
 
-            ch.configureBlocking(false).register(key.selector(), SelectionKey.OP_READ);
-
-            register(ch, endpointConfig);
+            attachEndpointContext(ch, endpointConfig, false);
         } catch (Exception e) {
             logger.error("", e);
         }
@@ -204,7 +248,7 @@ public class MainLoop {
         
         ByteBuffer recvBuf = ctx.getEncryptedIncomingBuf();
         ByteBuffer appBuf  = ctx.getIncomingBuf();
-
+        
         try {
             int count;
 
@@ -212,14 +256,17 @@ public class MainLoop {
                 recvBuf.flip();//т.к. далее планируется только чтение из данного буфера
                 
                 boolean exit = false;
+                
                 while (!exit) {
-                    SSLEngineResult result = sslEngine.unwrap(recvBuf, appBuf);
+                    SSLEngineResult result = ctx.getSslEngine().unwrap(recvBuf, appBuf);
                     
                     switch(result.getStatus()) {
                         case OK:
                             recvBuf.compact();//т.к. далее планируется только запись в этот буфер
                             
-                            if (result.getHandshakeStatus() == HandshakeStatus.FINISHED) {
+                            if (result.getHandshakeStatus() == HandshakeStatus.NEED_TASK) {
+                                processTask(ctx);
+                            } else if (result.getHandshakeStatus() == HandshakeStatus.FINISHED) {
                                 appBuf.clear();
                             } else if (result.getHandshakeStatus() == HandshakeStatus.NEED_WRAP) {
                                 appBuf.clear();
@@ -244,20 +291,21 @@ public class MainLoop {
                                 
                                 appBuf.compact();//удаляем считанные данные, далее планируется запись
                             }
+                            
                             exit = true;
                             break;
                         case CLOSED: throw new EOFException();
                         case BUFFER_OVERFLOW:
                             appBuf.flip();//т.к. далее планируется только чтение из данного буфера
-                            ByteBuffer b = ByteBuffer.allocateDirect(sslEngine.getSession().getApplicationBufferSize() + appBuf.limit()).put(appBuf);
+                            ByteBuffer b = ByteBuffer.allocateDirect(ctx.getSslEngine().getSession().getApplicationBufferSize() + appBuf.limit()).put(appBuf);
                             BufUtils.destroyDirect(appBuf);
                             appBuf = b;//далее планируется только запись в данный буфер
                             ctx.setIncomingBuf(appBuf);
                             
                             break;
                         case BUFFER_UNDERFLOW:
-                            if (sslEngine.getSession().getPacketBufferSize() > recvBuf.capacity()) {
-                                b = ByteBuffer.allocateDirect(sslEngine.getSession().getPacketBufferSize()).put(recvBuf);
+                            if (ctx.getSslEngine().getSession().getPacketBufferSize() > recvBuf.capacity()) {
+                                b = ByteBuffer.allocateDirect(ctx.getSslEngine().getSession().getPacketBufferSize()).put(recvBuf);
                                 BufUtils.destroyDirect(recvBuf);
                                 recvBuf = b;//далее планируется только запись в данный буфер
                                 ctx.setEncryptedIncomingBuf(recvBuf);
@@ -283,8 +331,24 @@ public class MainLoop {
 
             onReceive(messages, ctx);
 
-            ctx.getEventHandler().closeConnection(e);
+            ctx.getEventHandler().closedByPeer(e);
         }
+    }
+
+    private void processTask(EndpointContext<ByteMessage> ctx) {
+        List<Future<?>> futures = new ArrayList<>();
+        
+        Runnable task;
+        
+        while ((task = ctx.getSslEngine().getDelegatedTask()) != null) {
+            futures.add(executorService.submit(task));
+        }
+        
+        completionService.submit(() -> {
+            for (Future<?> f : futures) f.get();
+            
+            return ctx;
+        });
     }
 
     private void onReceive(List<ByteMessage> messages, EndpointContext<ByteMessage> ctx) {
@@ -349,7 +413,7 @@ public class MainLoop {
                         logger.error("", e);
                     }
 
-                    ctx.getEventHandler().closeConnection(null);
+                    ctx.getEventHandler().closeContext();
                 }
 
                 readEndpoints.removeFirst();

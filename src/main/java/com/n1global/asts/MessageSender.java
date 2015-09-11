@@ -47,7 +47,9 @@ public class MessageSender<T extends ByteMessage> {
         _sendMessages();
 
         if (ctx.getSelectionKey().isValid()) {//maybe invalid if we have write exception in _sendMessages()
-            checkQueueState();
+            checkWriteState();
+            
+            checkCloseRequestComplete();
         }
     }
 
@@ -76,7 +78,7 @@ public class MessageSender<T extends ByteMessage> {
                 logger.error("", e);
             }
             
-            ctx.getEventHandler().closeConnection(e);
+            ctx.getEventHandler().closedByPeer(e);
         }
     }
 
@@ -84,30 +86,31 @@ public class MessageSender<T extends ByteMessage> {
         T msg;
         
         while ((msg = sendQueue.peek()) != null) {
-            if (ctx.getSslEngine().getHandshakeStatus() == HandshakeStatus.NOT_HANDSHAKING) {
+            if (ctx.getSslEngine().getHandshakeStatus() != HandshakeStatus.NOT_HANDSHAKING || ctx.isCloseRequested()) {
+                sendQueue.remove();//удаляем маркер-сообщение
+            } else {
                 if (ctx.getProtocol().putNextMsg(appBuf, msg)) {
                     sendQueue.remove();
                 } else {
                     break;
                 }
-            } else {
-                sendQueue.remove();//удаляем маркер-сообщение
             }
         }
-            
-        appBuf.flip();//теперь читаем
     }
 
     @SuppressWarnings({ "unchecked", "incomplete-switch" })
     private void encode(ByteBuffer appBuf, ByteBuffer sndBuf) throws SSLException, EOFException {
+        appBuf.flip();//теперь читаем
+        
         boolean wrapSuccess = false;
         
         while (!wrapSuccess) {  
             SSLEngineResult res = ctx.getSslEngine().wrap(appBuf, sndBuf);
             
+            if (res.getHandshakeStatus() == HandshakeStatus.NEED_TASK) throw new IllegalStateException("NEED TASK???");
+            
             if (res.getHandshakeStatus() == HandshakeStatus.NEED_WRAP) {
-                sendQueue.add((T) new ByteMessage());//страхуемся на случай, если предыдущий wrap записал в sndBuf не всё, что нужно для отправки
-                //при этом, если это "не всё" уйдет в сокет полностью, то цикл завершится и не будет возможности вызвать wrap еще раз
+                sendQueue.add((T) new ByteMessage());//страхуемся на случай, если предыдущий wrap записал в sndBuf не всё, что нужно для отправки при этом, если это "не всё" уйдет в сокет полностью, то цикл завершится и не будет возможности вызвать wrap еще раз
             }
             
             switch (res.getStatus()) {
@@ -117,7 +120,6 @@ public class MessageSender<T extends ByteMessage> {
                     wrapSuccess = true;
                 
                     break;
-                case CLOSED: throw new EOFException();
                 case BUFFER_OVERFLOW:
                     sndBuf.flip();//т.к. далее планируется только чтение из данного буфера
                     ByteBuffer b = ByteBuffer.allocateDirect(ctx.getSslEngine().getSession().getPacketBufferSize() + sndBuf.limit()).put(sndBuf);
@@ -148,7 +150,7 @@ public class MessageSender<T extends ByteMessage> {
         return socketIsFull;
     }
 
-    private void checkQueueState() {
+    private void checkWriteState() {
         if (!ctx.getEncryptedOutgoingBuf().hasRemaining()) {
             ctx.getSelectionKey().interestOps(SelectionKey.OP_READ);
 
@@ -157,6 +159,14 @@ public class MessageSender<T extends ByteMessage> {
             ctx.getSelectionKey().interestOps(SelectionKey.OP_READ | SelectionKey.OP_WRITE);
 
             canWriteNow = false;
+        }
+    }
+    
+    private void checkCloseRequestComplete() {
+        if (!ctx.getEncryptedOutgoingBuf().hasRemaining() && ctx.isCloseRequested()) {
+            if (!ctx.getSslEngine().isOutboundDone()) throw new IllegalStateException("Bug in code");
+                
+            ctx.getSslEngine().closeOutbound();
         }
     }
 }

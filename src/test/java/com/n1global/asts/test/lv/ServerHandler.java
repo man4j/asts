@@ -40,7 +40,7 @@ public class ServerHandler extends AbstractEventHandler<StringMessage> {
     }
     
     @Override
-    public void onDisconnect(Exception e) {
+    public void onClosedByPeer(Exception e) {
         clientAdder.decrement();
     }
     

@@ -2,8 +2,12 @@ package com.n1global.asts;
 
 import java.nio.ByteBuffer;
 import java.nio.channels.SelectionKey;
+import java.security.NoSuchAlgorithmException;
 
+import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLEngine;
+import javax.net.ssl.SSLException;
+import javax.net.ssl.SSLSession;
 
 import com.n1global.asts.message.ByteMessage;
 import com.n1global.asts.protocol.AbstractFrameProtocol;
@@ -39,12 +43,33 @@ public class EndpointContext<T extends ByteMessage> {
     
     private RecvState state = RecvState.IDLE;
     
-    public void initBuffers(int capacity) {
+    private boolean closeRequested;
+    
+    @SuppressWarnings("unchecked")
+    public EndpointContext() {
+        sender = (MessageSender<T>) new MessageSender<>((EndpointContext<ByteMessage>) this);
+        idleNode = new EndpointContextContainer<T>(this);
+        readNode = new EndpointContextContainer<T>(this);
+    }
+    
+    public void initSSL(SSLContext sslContext, boolean client) throws SSLException, NoSuchAlgorithmException {
+        sslEngine = sslContext.createSSLEngine();
+        
+        sslEngine.setUseClientMode(client);
+        sslEngine.beginHandshake();//need for process initial marker message (getHandshakeStatus)
+        
+        SSLSession s = sslEngine.getSession();
+        
+        initApplicationBuffers(s.getApplicationBufferSize());
+        initEncryptedBuffers(s.getPacketBufferSize());
+    }
+    
+    private void initApplicationBuffers(int capacity) {
         outgoingBuf = ByteBuffer.allocateDirect(capacity);
         incomingBuf = ByteBuffer.allocateDirect(capacity);
     }
     
-    public void initEncryptedBuffers(int capacity) {
+    private void initEncryptedBuffers(int capacity) {
         encryptedIncomingBuf = ByteBuffer.allocateDirect(capacity);
         encryptedOutgoingBuf = ByteBuffer.allocateDirect(capacity);
     }
@@ -60,10 +85,6 @@ public class EndpointContext<T extends ByteMessage> {
         return sender;
     }
 
-    void setSender(MessageSender<T> sender) {
-        this.sender = sender;
-    }
-    
     public SSLEngine getSslEngine() {
         return sslEngine;
     }
@@ -106,16 +127,8 @@ public class EndpointContext<T extends ByteMessage> {
         return readNode;
     }
 
-    public void setReadNode(EndpointContextContainer<T> readNode) {
-        this.readNode = readNode;
-    }
-
     public EndpointContextContainer<T> getIdleNode() {
         return idleNode;
-    }
-
-    public void setIdleNode(EndpointContextContainer<T> idleNode) {
-        this.idleNode = idleNode;
     }
 
     public Object getPayload() {
@@ -164,5 +177,13 @@ public class EndpointContext<T extends ByteMessage> {
 
     public void setState(RecvState state) {
         this.state = state;
+    }
+
+    public boolean isCloseRequested() {
+        return closeRequested;
+    }
+
+    public void setCloseRequested(boolean closeRequested) {
+        this.closeRequested = closeRequested;
     }
 }
