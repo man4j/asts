@@ -9,7 +9,8 @@ import com.n1global.asts.message.websocket.WebSocketMessageType;
 import com.n1global.asts.protocol.AbstractFrameProtocol;
 import com.n1global.asts.util.BufUtils;
 
-public class WebSocketProtocol extends AbstractFrameProtocol<WebSocketMessage> {
+abstract public class WebSocketProtocol extends AbstractFrameProtocol<WebSocketMessage> {
+    /*
     private ByteBuffer currentIncomingBuf;
 
     private ByteBuffer header1Buf = ByteBuffer.allocate(2);
@@ -139,5 +140,5 @@ public class WebSocketProtocol extends AbstractFrameProtocol<WebSocketMessage> {
     public void msgToBuf(ByteBuffer buf, WebSocketMessage msg) {
         // TODO Auto-generated method stub
         
-    }
+    }*/
 }

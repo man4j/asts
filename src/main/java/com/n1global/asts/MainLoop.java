@@ -15,12 +15,9 @@ import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
-import java.util.concurrent.CompletionService;
-import java.util.concurrent.ExecutorCompletionService;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Future;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.LinkedBlockingQueue;
 
 import javax.net.ssl.KeyManagerFactory;
 import javax.net.ssl.SSLContext;
@@ -47,26 +44,18 @@ public class MainLoop {
     
     private SSLContext sslContext;
     
+    private long lastTimeoutsCheck = System.currentTimeMillis();
+    
     private TLinkedList<EndpointContextContainer<ByteMessage>> idleEndpoints  = new TLinkedList<>();
     private TLinkedList<EndpointContextContainer<ByteMessage>> readEndpoints  = new TLinkedList<>();
     
-    private ExecutorService executorService = Executors.newCachedThreadPool();
-    
-    private CompletionService<EndpointContext<ByteMessage>> completionService = new ExecutorCompletionService<>(executorService);
+    private LinkedBlockingQueue<ContextAndException> completedHandshakeTasks = new LinkedBlockingQueue<>();
 
     public MainLoop(MainLoopConfig config) {
         try {
             this.config = config;
             
-            sslContext = SSLContext.getInstance("TLSv1.2");
-            
-            KeyManagerFactory kmf = KeyManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
-            kmf.init(config.getKeyStore(), config.getKeyStorePassword().toCharArray());
-            
-            TrustManagerFactory tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
-            tmf.init(config.getTrustStore());
-            
-            sslContext.init(kmf.getKeyManagers(), tmf.getTrustManagers(), null);
+            createSslContext(config);
 
             selector = Selector.open();
         } catch (Exception e) {
@@ -74,19 +63,26 @@ public class MainLoop {
         }
     }
 
-    public MainLoop() {
-        this(new MainLoopConfig.Builder().build());
+    private void createSslContext(MainLoopConfig config) throws Exception {
+        sslContext = SSLContext.getInstance("TLSv1.2");
+        
+        KeyManagerFactory kmf = KeyManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
+        kmf.init(config.getKeyStore(), config.getKeyStorePassword().toCharArray());
+        
+        TrustManagerFactory tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
+        tmf.init(config.getTrustStore());
+        
+        sslContext.init(kmf.getKeyManagers(), tmf.getTrustManagers(), null);
     }
 
     public <T extends ByteMessage> void addServer(EndpointConfig<T> config) {
         try {
-            ServerSocketChannel serverSocketChannel = (ServerSocketChannel) ServerSocketChannel.open()
-                                                                                               .bind(new InetSocketAddress(config.getLocalAddr(), config.getLocalPort()), 50)
-                                                                                               .setOption(StandardSocketOptions.SO_REUSEADDR, true)
-                                                                                               .setOption(StandardSocketOptions.SO_RCVBUF, config.getSocketRecvBufSize())
-                                                                                               .configureBlocking(false)                                                                                               ;
-
-            serverSocketChannel.register(selector, SelectionKey.OP_ACCEPT, config);
+            ServerSocketChannel.open()
+                               .bind(new InetSocketAddress(config.getLocalAddr(), config.getLocalPort()), 50)
+                               .setOption(StandardSocketOptions.SO_REUSEADDR, true)
+                               .setOption(StandardSocketOptions.SO_RCVBUF, config.getSocketRecvBufSize())
+                               .configureBlocking(false)
+                               .register(selector, SelectionKey.OP_ACCEPT, config);
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
@@ -94,19 +90,112 @@ public class MainLoop {
 
     public <T extends ByteMessage> void addClient(EndpointConfig<T> config, SocketAddress remote) {
         try {
-            SocketChannel socketChannel = (SocketChannel) SocketChannel.open().configureBlocking(false);
-            
-            socketChannel.bind(new InetSocketAddress(config.getLocalAddr(), config.getLocalPort()))
-                         .setOption(StandardSocketOptions.SO_REUSEADDR, true)
-                         .setOption(StandardSocketOptions.SO_KEEPALIVE, true)
-                         .setOption(StandardSocketOptions.TCP_NODELAY, true)
-                         .setOption(StandardSocketOptions.SO_RCVBUF, config.getSocketRecvBufSize())
-                         .setOption(StandardSocketOptions.SO_SNDBUF, config.getSocketSendBufSize())
-                         .register(selector, SelectionKey.OP_CONNECT, config);
-
-            socketChannel.connect(remote);
+            ((SocketChannel) SocketChannel.open()
+                                          .bind(new InetSocketAddress(config.getLocalAddr(), config.getLocalPort()))
+                                          .setOption(StandardSocketOptions.SO_REUSEADDR, true)
+                                          .setOption(StandardSocketOptions.SO_KEEPALIVE, true)
+                                          .setOption(StandardSocketOptions.TCP_NODELAY, true)
+                                          .setOption(StandardSocketOptions.SO_RCVBUF, config.getSocketRecvBufSize())
+                                          .setOption(StandardSocketOptions.SO_SNDBUF, config.getSocketSendBufSize())
+                                          .configureBlocking(false)
+                                          .register(selector, SelectionKey.OP_CONNECT, config)
+                                          .channel())
+                                          .connect(remote);
         } catch (Exception e) {
             throw new RuntimeException(e);
+        }
+    }
+    
+    public void loop() {
+        while (!Thread.currentThread().isInterrupted()) {
+            select();
+            processEvents();
+            invokeSelectHandler();
+            checkTimeouts();
+            checkHandshakeTasks();
+        }
+
+        closeAll();
+    }
+    
+    private void select() {
+        try {
+            selector.select(1000);
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+    }
+    
+    private void processEvents() {
+        Iterator<SelectionKey> iter = selector.selectedKeys().iterator();
+
+        while (iter.hasNext()) {
+            SelectionKey key = iter.next();
+
+            if (key.isAcceptable()) processAccept(key);
+            if (key.isConnectable()) processConnect(key);
+            if (key.isReadable()) processRead(key);
+            if (key.isValid() && key.isWritable()) processWrite(key);
+
+            iter.remove();
+        }
+    }
+    
+    private void invokeSelectHandler() {
+        if (config.getSelectHandler() != null) {
+            try {
+                config.getSelectHandler().onSelect(selector);
+            } catch (Exception e) {
+                logger.error("", e);
+            }
+        }
+    }
+    
+    private void checkTimeouts() {
+        if (System.currentTimeMillis() - lastTimeoutsCheck > 1000) {
+            checkRead();
+            checkIdle();
+
+            lastTimeoutsCheck = System.currentTimeMillis();
+        }
+    }
+    
+    private void checkHandshakeTasks() {
+        ContextAndException ctxAndEx;
+        
+        while ((ctxAndEx = completedHandshakeTasks.poll()) != null) {
+            EndpointContext<ByteMessage> ctx = ctxAndEx.getCtx();
+            
+            if (ctxAndEx.getE() != null) {
+                logger.error("", ctxAndEx.getE());
+                
+                ctx.getEventHandler().closedByPeer(ctxAndEx.getE());
+            } else {
+                switch (ctx.getSslEngine().getHandshakeStatus()) {
+                    case NEED_TASK:
+                        processTask(ctx);
+                        
+                        break;
+                    case NEED_WRAP:
+                        ctx.getSender().send(new ByteMessage());
+                        
+                        break;
+                    case NEED_UNWRAP:
+                        try {
+                            unwrap(ctx);
+                        } catch (EOFException e) {
+                            ctx.getEventHandler().closedByPeer(null);
+                        } catch (Exception e) {
+                            logger.error("", e);
+                            
+                            ctx.getEventHandler().closedByPeer(e);
+                        }
+                        
+                        break;
+                    default:
+                        throw new IllegalStateException("Unexpected handshake status: " + ctx.getSslEngine().getHandshakeStatus());
+                }
+            }
         }
     }
 
@@ -123,79 +212,7 @@ public class MainLoop {
 
         idleEndpoints.add((EndpointContextContainer<ByteMessage>) ctx.getIdleNode());
         
-        ctx.getEventHandler().onConnect();
-        
         return ctx;
-    }
-
-    public void loop() {
-        long lastTimeoutsCheck = System.currentTimeMillis();
-        
-        while (!Thread.currentThread().isInterrupted()) {
-            try {
-                selector.select(1000);
-            } catch (IOException e) {
-                throw new RuntimeException(e);
-            }
-
-            Iterator<SelectionKey> iter = selector.selectedKeys().iterator();
-
-            while (iter.hasNext()) {
-                SelectionKey key = iter.next();
-
-                if (key.isAcceptable()) processAccept(key);
-                if (key.isConnectable()) processConnect(key);
-                if (key.isReadable()) processRead(key);
-                if (key.isValid() && key.isWritable()) processWrite(key);
-
-                iter.remove();
-            }
-
-            if (config.getSelectHandler() != null) {
-                try {
-                    config.getSelectHandler().onSelect(selector);
-                } catch (Exception e) {
-                    logger.error("", e);
-                }
-            }
-
-            if (System.currentTimeMillis() - lastTimeoutsCheck > 1000) {
-                checkRead();
-                checkIdle();
-
-                lastTimeoutsCheck = System.currentTimeMillis();
-            }            
-            
-            Future<EndpointContext<ByteMessage>> f;
-            
-            while ((f = completionService.poll()) != null) {
-                try {
-                    EndpointContext<ByteMessage> ctx = f.get();
-                    
-                    switch (ctx.getSslEngine().getHandshakeStatus()) {
-                        case NEED_TASK:
-                            processTask(ctx);
-                            break;
-                        case NEED_WRAP:
-                            ctx.getSender().send(new ByteMessage());
-                            break;
-                        default:
-                            throw new IllegalStateException("Unexpected handshake status: " + ctx.getSslEngine().getHandshakeStatus());
-                    }
-                } catch (Exception e) {
-                    throw new RuntimeException(e);
-                }
-            }
-        }
-
-        try {
-            selector.close();
-            
-            executorService.shutdownNow();
-            executorService.awaitTermination(1, TimeUnit.DAYS);
-        } catch (Exception e) {
-            throw new RuntimeException(e);
-        }
     }
 
     @SuppressWarnings("unchecked")
@@ -216,15 +233,15 @@ public class MainLoop {
     @SuppressWarnings("unchecked")
     private void processAccept(SelectionKey key) {
         try {
-            SocketChannel ch = ((ServerSocketChannel) key.channel()).accept();
-
             EndpointConfig<ByteMessage> endpointConfig = (EndpointConfig<ByteMessage>) key.attachment();
-
-            ch.setOption(StandardSocketOptions.SO_KEEPALIVE, true)
-              .setOption(StandardSocketOptions.TCP_NODELAY, true)
-              .setOption(StandardSocketOptions.SO_SNDBUF, endpointConfig.getSocketSendBufSize())
-              .configureBlocking(false)
-              .register(key.selector(), SelectionKey.OP_READ);
+            
+            SocketChannel ch = (SocketChannel) ((ServerSocketChannel) key.channel()).accept()
+                                                                                    .setOption(StandardSocketOptions.SO_KEEPALIVE, true)
+                                                                                    .setOption(StandardSocketOptions.TCP_NODELAY, true)
+                                                                                    .setOption(StandardSocketOptions.SO_SNDBUF, endpointConfig.getSocketSendBufSize())
+                                                                                    .configureBlocking(false)
+                                                                                    .register(key.selector(), SelectionKey.OP_READ)
+                                                                                    .channel();
 
             attachEndpointContext(ch, endpointConfig, false);
         } catch (Exception e) {
@@ -240,99 +257,103 @@ public class MainLoop {
 
     @SuppressWarnings("unchecked")
     private void bytes2Messages(SelectionKey key) {
-        SocketChannel ch = (SocketChannel) key.channel();
-
         EndpointContext<ByteMessage> ctx = (EndpointContext<ByteMessage>) key.attachment();
 
-        List<ByteMessage> messages = new ArrayList<>();
-        
         ByteBuffer recvBuf = ctx.getEncryptedIncomingBuf();
-        ByteBuffer appBuf  = ctx.getIncomingBuf();
         
         try {
             int count;
+            
+            HandshakeStatus s = null;
 
-            while((count = ch.read(recvBuf)) > 0) {
-                recvBuf.flip();//т.к. далее планируется только чтение из данного буфера
-                
-                boolean exit = false;
-                
-                while (!exit) {
-                    SSLEngineResult result = ctx.getSslEngine().unwrap(recvBuf, appBuf);
-                    
-                    switch(result.getStatus()) {
-                        case OK:
-                            recvBuf.compact();//т.к. далее планируется только запись в этот буфер
-                            
-                            if (result.getHandshakeStatus() == HandshakeStatus.NEED_TASK) {
-                                processTask(ctx);
-                            } else if (result.getHandshakeStatus() == HandshakeStatus.FINISHED) {
-                                appBuf.clear();
-                            } else if (result.getHandshakeStatus() == HandshakeStatus.NEED_WRAP) {
-                                appBuf.clear();
-                                
-                                ctx.getSender().send(new ByteMessage());
-                            } else if (result.getHandshakeStatus() == HandshakeStatus.NOT_HANDSHAKING) {
-                                appBuf.flip();//т.к. далее планируется только чтение из данного буфера
-                                
-                                ByteMessage msg;
-                                
-                                do {
-                                    appBuf.mark();//запоминаем позицию начала сообщения
-                                    
-                                    if ((msg = ctx.getProtocol().getNextMsg(appBuf)) != null) {
-                                        messages.add(msg);
-                                        ctx.setState(RecvState.IDLE);
-                                    } else {
-                                        appBuf.reset();//если сообщение считано не полностью, возвращаемся к позиции начала сообщения
-                                        ctx.setState(RecvState.READ);
-                                    }
-                                } while (msg != null && appBuf.hasRemaining());
-                                
-                                appBuf.compact();//удаляем считанные данные, далее планируется запись
-                            }
-                            
-                            exit = true;
-                            break;
-                        case CLOSED: throw new EOFException();
-                        case BUFFER_OVERFLOW:
-                            appBuf.flip();//т.к. далее планируется только чтение из данного буфера
-                            ByteBuffer b = ByteBuffer.allocateDirect(ctx.getSslEngine().getSession().getApplicationBufferSize() + appBuf.limit()).put(appBuf);
-                            BufUtils.destroyDirect(appBuf);
-                            appBuf = b;//далее планируется только запись в данный буфер
-                            ctx.setIncomingBuf(appBuf);
-                            
-                            break;
-                        case BUFFER_UNDERFLOW:
-                            if (ctx.getSslEngine().getSession().getPacketBufferSize() > recvBuf.capacity()) {
-                                b = ByteBuffer.allocateDirect(ctx.getSslEngine().getSession().getPacketBufferSize()).put(recvBuf);
-                                BufUtils.destroyDirect(recvBuf);
-                                recvBuf = b;//далее планируется только запись в данный буфер
-                                ctx.setEncryptedIncomingBuf(recvBuf);
-                            }
-                            
-                            exit = true;
-                            break;
-                    }
-                }
+            while(((count = ((SocketChannel) key.channel()).read(recvBuf)) > 0) && s != HandshakeStatus.NEED_TASK) {
+                s = unwrap(ctx);
             }
 
             if (count == -1) {
                 throw new EOFException();
             }
-
-            onReceive(messages, ctx);
+        } catch (EOFException e) {
+            ctx.getEventHandler().closedByPeer(null);
         } catch (Exception e) {//maybe "IOException: Connection reset by peer" in case when other peer start reading input stream but not fully. In this case other peer send RST.
-            if (e instanceof EOFException) {
-                e = null; //normally disconnect
-            } else {
-                logger.error("", e);
-            }
-
-            onReceive(messages, ctx);
-
+            logger.error("", e);
+            
             ctx.getEventHandler().closedByPeer(e);
         }
+    }
+    
+    private HandshakeStatus unwrap(EndpointContext<ByteMessage> ctx) throws SSLException, EOFException {
+        ByteBuffer recvBuf = ctx.getEncryptedIncomingBuf();
+        ByteBuffer appBuf  = ctx.getIncomingBuf();
+        
+        List<ByteMessage> messages = new ArrayList<>();
+        
+        recvBuf.flip();//т.к. далее планируется только чтение из данного буфера
+        
+        boolean exit = false;
+        
+        SSLEngineResult result = null;
+        
+        while (!exit) {
+            result = ctx.getSslEngine().unwrap(recvBuf, appBuf);//appBuf при хендшейке не модифицируется
+            
+            switch(result.getStatus()) {
+                case OK:
+                    recvBuf.compact();//т.к. далее планируется только запись в этот буфер
+                    
+                    if (result.getHandshakeStatus() == HandshakeStatus.NEED_TASK) processTask(ctx);
+                    if (result.getHandshakeStatus() == HandshakeStatus.FINISHED) ctx.getEventHandler().onConnect();
+                    if (result.getHandshakeStatus() == HandshakeStatus.NEED_WRAP) ctx.getSender().send(new ByteMessage());
+                    if (result.getHandshakeStatus() == HandshakeStatus.NEED_UNWRAP) unwrap(ctx);
+                    if (result.getHandshakeStatus() == HandshakeStatus.NOT_HANDSHAKING) {
+                        appBuf.flip();//т.к. далее планируется только чтение из данного буфера
+                        
+                        ByteMessage msg;
+                        
+                        do {
+                            appBuf.mark();//запоминаем позицию начала сообщения
+                            
+                            if ((msg = ctx.getProtocol().getNextMsg(appBuf)) != null) {
+                                messages.add(msg);
+                                ctx.setState(RecvState.IDLE);
+                            } else {
+                                appBuf.reset();//если сообщение считано не полностью, возвращаемся к позиции начала сообщения
+                                ctx.setState(RecvState.READ);
+                            }
+                        } while (msg != null && appBuf.hasRemaining());
+                        
+                        appBuf.compact();//удаляем считанные данные, далее планируется запись
+                    }
+                    
+                    exit = true;
+                    break;
+                case CLOSED: throw new EOFException();
+                case BUFFER_OVERFLOW:
+                    appBuf.flip();//т.к. далее планируется только чтение из данного буфера
+                    ByteBuffer b = ByteBuffer.allocateDirect(ctx.getSslEngine().getSession().getApplicationBufferSize() + appBuf.limit()).put(appBuf);
+                    BufUtils.destroyDirect(appBuf);
+                    appBuf = b;//далее планируется только запись в данный буфер
+                    ctx.setIncomingBuf(appBuf);
+                    
+                    break;
+                case BUFFER_UNDERFLOW:
+                    recvBuf.compact();//т.к. далее планируется только запись в этот буфер
+                    
+                    if (ctx.getSslEngine().getSession().getPacketBufferSize() > recvBuf.capacity()) {
+                        b = ByteBuffer.allocateDirect(ctx.getSslEngine().getSession().getPacketBufferSize()).put(recvBuf);
+                        BufUtils.destroyDirect(recvBuf);
+                        recvBuf = b;//далее планируется только запись в данный буфер
+                        ctx.setEncryptedIncomingBuf(recvBuf);
+                    }
+                    
+                    exit = true;
+                    break;
+            }
+        }
+        
+        onReceive(messages, ctx);
+        
+        return result.getHandshakeStatus();
     }
 
     private void processTask(EndpointContext<ByteMessage> ctx) {
@@ -341,13 +362,20 @@ public class MainLoop {
         Runnable task;
         
         while ((task = ctx.getSslEngine().getDelegatedTask()) != null) {
-            futures.add(executorService.submit(task));
+            futures.add(CompletableFuture.runAsync(task));
         }
         
-        completionService.submit(() -> {
-            for (Future<?> f : futures) f.get();
+        CompletableFuture.runAsync(() -> {
+            Exception ex = null;
             
-            return ctx;
+            try {
+                for (Future<?> f : futures) f.get();
+            } catch (Exception e) {
+                ex = e;
+            }
+            
+            completedHandshakeTasks.add(new ContextAndException(ctx, ex));
+            selector.wakeup();
         });
     }
 
@@ -420,6 +448,14 @@ public class MainLoop {
             } else {
                 break;
             }
+        }
+    }
+    
+    private void closeAll() {
+        try {
+            selector.close();
+        } catch (Exception e) {
+            throw new RuntimeException(e);
         }
     }
 }

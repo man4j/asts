@@ -26,6 +26,8 @@ public class MessageSender<T extends ByteMessage> {
     private EndpointContext<T> ctx;
 
     private boolean canWriteNow = true;
+    
+    private boolean justConnect = false;
 
     MessageSender(EndpointContext<T> ctx) {
         this.ctx = ctx;
@@ -35,11 +37,7 @@ public class MessageSender<T extends ByteMessage> {
         if (ctx.getSelectionKey().isValid()) {//maybe invalid if peer close connection before onReceive (f.e. in onConnect)
             sendQueue.add(msg);
 
-            if (canWriteNow) {
-                sendMessages();
-            } else {
-                ctx.getSelectionKey().interestOps(SelectionKey.OP_READ | SelectionKey.OP_WRITE);
-            }
+            if (canWriteNow) sendMessages();
         }
     }
 
@@ -50,6 +48,8 @@ public class MessageSender<T extends ByteMessage> {
             checkWriteState();
             
             checkCloseRequestComplete();
+            
+            checkConnect();
         }
     }
 
@@ -86,8 +86,12 @@ public class MessageSender<T extends ByteMessage> {
         T msg;
         
         while ((msg = sendQueue.peek()) != null) {
-            if (ctx.getSslEngine().getHandshakeStatus() != HandshakeStatus.NOT_HANDSHAKING || ctx.isCloseRequested()) {
-                sendQueue.remove();//удаляем маркер-сообщение
+            if (ctx.getSslEngine().getHandshakeStatus() != HandshakeStatus.NOT_HANDSHAKING) { //если это маркер-сообщение об открытии соединения
+                sendQueue.remove();
+            } else if (ctx.isCloseRequested() && msg.getValue().length == 0) {//если это маркер-сообщение о закрытии соединения
+                sendQueue.clear();
+                
+                ctx.getSslEngine().closeOutbound();//после этого wrap начнет генерировать сообщения о завершении соединения
             } else {
                 if (ctx.getProtocol().putNextMsg(appBuf, msg)) {
                     sendQueue.remove();
@@ -105,13 +109,11 @@ public class MessageSender<T extends ByteMessage> {
         boolean wrapSuccess = false;
         
         while (!wrapSuccess) {  
-            SSLEngineResult res = ctx.getSslEngine().wrap(appBuf, sndBuf);
+            SSLEngineResult res = ctx.getSslEngine().wrap(appBuf, sndBuf);//appBuf при хендшейке не модифицируется
             
             if (res.getHandshakeStatus() == HandshakeStatus.NEED_TASK) throw new IllegalStateException("NEED TASK???");
-            
-            if (res.getHandshakeStatus() == HandshakeStatus.NEED_WRAP) {
-                sendQueue.add((T) new ByteMessage());//страхуемся на случай, если предыдущий wrap записал в sndBuf не всё, что нужно для отправки при этом, если это "не всё" уйдет в сокет полностью, то цикл завершится и не будет возможности вызвать wrap еще раз
-            }
+            if (res.getHandshakeStatus() == HandshakeStatus.FINISHED)  justConnect = true;//здесь выставляем флаг, а не вызываем onConnect, чтобы исключить рекурсивные вызовы send
+            if (res.getHandshakeStatus() == HandshakeStatus.NEED_WRAP) sendQueue.add((T) new ByteMessage());
             
             switch (res.getStatus()) {
                 case OK:
@@ -151,7 +153,7 @@ public class MessageSender<T extends ByteMessage> {
     }
 
     private void checkWriteState() {
-        if (!ctx.getEncryptedOutgoingBuf().hasRemaining()) {
+        if (ctx.getEncryptedOutgoingBuf().position() == 0) {//значит всё было вычитано и передано в сокет
             ctx.getSelectionKey().interestOps(SelectionKey.OP_READ);
 
             canWriteNow = true;
@@ -163,10 +165,17 @@ public class MessageSender<T extends ByteMessage> {
     }
     
     private void checkCloseRequestComplete() {
-        if (!ctx.getEncryptedOutgoingBuf().hasRemaining() && ctx.isCloseRequested()) {
+        if (ctx.getEncryptedOutgoingBuf().position() == 0 && ctx.isCloseRequested()) {//значит всё было вычитано и передано, включая сообщения о завершении соединения
             if (!ctx.getSslEngine().isOutboundDone()) throw new IllegalStateException("Bug in code");
                 
-            ctx.getSslEngine().closeOutbound();
+            ctx.getEventHandler().closeContext();
+        }
+    }
+    
+    private void checkConnect() {
+        if (ctx.getEncryptedOutgoingBuf().position() == 0 && justConnect) {
+            ctx.getEventHandler().onConnect();
+            justConnect = false;
         }
     }
 }

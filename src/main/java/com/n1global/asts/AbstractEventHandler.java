@@ -38,7 +38,6 @@ public abstract class AbstractEventHandler<T extends ByteMessage> {
     @SuppressWarnings("unchecked")
     public void closeConnection() {
         try {
-            getEndpointContext().getSslEngine().closeOutbound();
             getEndpointContext().setCloseRequested(true);
             send((T) new ByteMessage());
         } catch (Exception e) {
