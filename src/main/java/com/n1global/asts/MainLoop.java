@@ -110,12 +110,11 @@ public class MainLoop {
         while (!Thread.currentThread().isInterrupted()) {
             select();
             processEvents();
-            invokeSelectHandler();
             checkTimeouts();
             checkHandshakeTasks();
         }
 
-        closeAll();
+        closeSelector();
     }
     
     private void select() {
@@ -134,20 +133,10 @@ public class MainLoop {
 
             if (key.isAcceptable()) processAccept(key);
             if (key.isConnectable()) processConnect(key);
+            if (key.isWritable()) processWrite(key);
             if (key.isReadable()) processRead(key);
-            if (key.isValid() && key.isWritable()) processWrite(key);
 
             iter.remove();
-        }
-    }
-    
-    private void invokeSelectHandler() {
-        if (config.getSelectHandler() != null) {
-            try {
-                config.getSelectHandler().onSelect(selector);
-            } catch (Exception e) {
-                logger.error("", e);
-            }
         }
     }
     
@@ -201,12 +190,7 @@ public class MainLoop {
 
     @SuppressWarnings("unchecked")
     private <T extends ByteMessage> EndpointContext<T> attachEndpointContext(SelectableChannel channel, EndpointConfig<T> config, boolean client) throws InstantiationException, IllegalAccessException, SSLException, NoSuchAlgorithmException {
-        EndpointContext<T> ctx = new EndpointContext<>();
-
-        ctx.initSSL(sslContext, client);
-        ctx.setEventHandler(config.getHandlerClass().newInstance());
-        ctx.setProtocol(config.getProtocolClass().newInstance());
-        ctx.setSelectionKey(channel.keyFor(selector));
+        EndpointContext<T> ctx = new EndpointContext<>(sslContext, client, config.getHandlerClass().newInstance(), config.getProtocolClass().newInstance(), channel.keyFor(selector));
 
         channel.keyFor(selector).attach(ctx);
 
@@ -451,7 +435,7 @@ public class MainLoop {
         }
     }
     
-    private void closeAll() {
+    private void closeSelector() {
         try {
             selector.close();
         } catch (Exception e) {

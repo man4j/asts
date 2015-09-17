@@ -46,13 +46,21 @@ public class EndpointContext<T extends ByteMessage> {
     private boolean closeRequested;
     
     @SuppressWarnings("unchecked")
-    public EndpointContext() {
+    public EndpointContext(SSLContext sslContext, boolean client, AbstractEventHandler<T> eventHandler, AbstractFrameProtocol<T> protocol, SelectionKey selectionKey) throws SSLException, NoSuchAlgorithmException {
         sender = (MessageSender<T>) new MessageSender<>((EndpointContext<ByteMessage>) this);
         idleNode = new EndpointContextContainer<T>(this);
         readNode = new EndpointContextContainer<T>(this);
+        
+        initSSL(sslContext, client);
+        
+        this.eventHandler = eventHandler;
+        this.protocol = protocol;
+        this.selectionKey = selectionKey;
+        
+        eventHandler.setEndpointContext(this);
     }
     
-    public void initSSL(SSLContext sslContext, boolean client) throws SSLException, NoSuchAlgorithmException {
+    private void initSSL(SSLContext sslContext, boolean client) throws SSLException, NoSuchAlgorithmException {
         sslEngine = sslContext.createSSLEngine();
         
         sslEngine.setUseClientMode(client);
@@ -93,26 +101,12 @@ public class EndpointContext<T extends ByteMessage> {
         return eventHandler;
     }
 
-    void setEventHandler(AbstractEventHandler<T> eventHandler) {
-        this.eventHandler = eventHandler;
-
-        eventHandler.setEndpointContext(this);
-    }
-
     AbstractFrameProtocol<T> getProtocol() {
         return protocol;
     }
 
-    void setProtocol(AbstractFrameProtocol<T> protocol) {
-        this.protocol = protocol;
-    }
-
     SelectionKey getSelectionKey() {
         return selectionKey;
-    }
-
-    void setSelectionKey(SelectionKey selectionKey) {
-        this.selectionKey = selectionKey;
     }
 
     long getLastRecv() {

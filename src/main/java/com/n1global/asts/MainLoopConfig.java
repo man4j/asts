@@ -7,18 +7,15 @@ public class MainLoopConfig {
 
     private int idleTimeout;
 
-    private SelectHandler selectHandler;
-    
     private KeyStore keyStore;
     
     private KeyStore trustStore;
     
     private String keyStorePassword;
 
-    private MainLoopConfig(int soTimeout, int idleTimeout, SelectHandler selectHandler, KeyStore keyStore, KeyStore trustStore, String keyStorePassword) {
+    private MainLoopConfig(int soTimeout, int idleTimeout, KeyStore keyStore, KeyStore trustStore, String keyStorePassword) {
         this.soTimeout = soTimeout;
         this.idleTimeout = idleTimeout;
-        this.selectHandler = selectHandler;
         this.keyStore = keyStore;
         this.trustStore = trustStore;
         this.keyStorePassword = keyStorePassword;
@@ -32,10 +29,6 @@ public class MainLoopConfig {
         return idleTimeout;
     }
 
-    public SelectHandler getSelectHandler() {
-        return selectHandler;
-    }
-    
     public KeyStore getKeyStore() {
         return keyStore;
     }
@@ -53,8 +46,6 @@ public class MainLoopConfig {
 
         private int idleTimeout = 30000;
 
-        private SelectHandler selectHandler;
-        
         private KeyStore keyStore;
         
         private KeyStore trustStore;
@@ -73,12 +64,6 @@ public class MainLoopConfig {
             return this;
         }
 
-        public Builder setSelectHandler(SelectHandler selectHandler) {
-            this.selectHandler = selectHandler;
-
-            return this;
-        }
-        
         /**
          * A KeyManager determines which authentication credentials to send to the remote host.
          */
@@ -104,7 +89,7 @@ public class MainLoopConfig {
         }
 
         public MainLoopConfig build() {
-            return new MainLoopConfig(soTimeout, idleTimeout, selectHandler, keyStore, trustStore, keyStorePassword);
+            return new MainLoopConfig(soTimeout, idleTimeout, keyStore, trustStore, keyStorePassword);
         }
     }
 }
