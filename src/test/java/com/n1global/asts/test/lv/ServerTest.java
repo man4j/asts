@@ -9,7 +9,7 @@ import com.n1global.asts.util.KeyStoreUtils;
 
 public class ServerTest {
     public static void main(String[] args) {
-        int procs = 1;//Runtime.getRuntime().availableProcessors();
+        int procs = Runtime.getRuntime().availableProcessors();
         
         System.out.println("Procs count: " + procs);
         
@@ -30,7 +30,7 @@ public class ServerTest {
                                                                                   .setHandlerClass(ServerHandler.class)
                                                                                   .setProtocolClass(LvStringMessageFrameProtocol.class)
                                                                                   .build());
-            
+                    
                     mainLoop.loop();
                 };
             }.start();

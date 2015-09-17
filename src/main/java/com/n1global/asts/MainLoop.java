@@ -50,7 +50,7 @@ public class MainLoop {
     private TLinkedList<EndpointContextContainer<ByteMessage>> readEndpoints  = new TLinkedList<>();
     
     private LinkedBlockingQueue<ContextAndException> completedHandshakeTasks = new LinkedBlockingQueue<>();
-
+    
     public MainLoop(MainLoopConfig config) {
         try {
             this.config = config;
@@ -155,6 +155,8 @@ public class MainLoop {
         while ((ctxAndEx = completedHandshakeTasks.poll()) != null) {
             EndpointContext<ByteMessage> ctx = ctxAndEx.getCtx();
             
+            ctx.setNeedTask(false);
+            
             if (ctxAndEx.getE() != null) {
                 logger.error("", ctxAndEx.getE());
                 
@@ -248,12 +250,10 @@ public class MainLoop {
         try {
             int count;
             
-            HandshakeStatus s = null;
-
-            while(((count = ((SocketChannel) key.channel()).read(recvBuf)) > 0) && s != HandshakeStatus.NEED_TASK) {
-                s = unwrap(ctx);
+            while(((count = ((SocketChannel) key.channel()).read(recvBuf)) > 0) && !ctx.isNeedTask()) {
+                unwrap(ctx);
             }
-
+            
             if (count == -1) {
                 throw new EOFException();
             }
@@ -266,7 +266,7 @@ public class MainLoop {
         }
     }
     
-    private HandshakeStatus unwrap(EndpointContext<ByteMessage> ctx) throws SSLException, EOFException {
+    private void unwrap(EndpointContext<ByteMessage> ctx) throws SSLException, EOFException {
         ByteBuffer recvBuf = ctx.getEncryptedIncomingBuf();
         ByteBuffer appBuf  = ctx.getIncomingBuf();
         
@@ -336,11 +336,11 @@ public class MainLoop {
         }
         
         onReceive(messages, ctx);
-        
-        return result.getHandshakeStatus();
     }
 
     private void processTask(EndpointContext<ByteMessage> ctx) {
+        ctx.setNeedTask(true);
+        
         List<Future<?>> futures = new ArrayList<>();
         
         Runnable task;

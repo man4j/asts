@@ -45,6 +45,8 @@ public class EndpointContext<T extends ByteMessage> {
     
     private boolean closeRequested;
     
+    private boolean needTask;
+    
     @SuppressWarnings("unchecked")
     public EndpointContext(SSLContext sslContext, boolean client, AbstractEventHandler<T> eventHandler, AbstractFrameProtocol<T> protocol, SelectionKey selectionKey) throws SSLException, NoSuchAlgorithmException {
         sender = (MessageSender<T>) new MessageSender<>((EndpointContext<ByteMessage>) this);
@@ -179,5 +181,13 @@ public class EndpointContext<T extends ByteMessage> {
 
     public void setCloseRequested(boolean closeRequested) {
         this.closeRequested = closeRequested;
+    }
+
+    public boolean isNeedTask() {
+        return needTask;
+    }
+
+    public void setNeedTask(boolean needTask) {
+        this.needTask = needTask;
     }
 }

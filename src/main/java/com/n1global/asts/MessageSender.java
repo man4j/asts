@@ -136,7 +136,7 @@ public class MessageSender<T extends ByteMessage> {
 
     private boolean writeToSocket(ByteBuffer sndBuf) throws IOException {
         sndBuf.flip();//готовимся читать
-
+        
         boolean socketIsFull = false;
         
         while (sndBuf.hasRemaining()) {
