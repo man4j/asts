@@ -7,13 +7,13 @@ import com.n1global.asts.protocol.websocket.WebSocketProtocol;
 
 public class Main {
     public static void main(String[] args) {
-        MainLoop mainLoop = new MainLoop();
-
-        mainLoop.addServer(new EndpointConfig.Builder<WebSocketMessage>().setHandlerClass(TestWebSocketHandler.class)
-                                                                         .setProtocolClass(WebSocketProtocol.class)
-                                                                         .setLocalPort(9999)
-                                                                         .build());
-
-        mainLoop.loop();
+//        MainLoop mainLoop = new MainLoop(null);
+//
+//        mainLoop.addServer(new EndpointConfig.Builder<WebSocketMessage>().setHandlerClass(TestWebSocketHandler.class)
+//                                                                         .setProtocolClass(WebSocketProtocol.class)
+//                                                                         .setLocalPort(9999)
+//                                                                         .build());
+//
+//        mainLoop.loop();
     }
 }
